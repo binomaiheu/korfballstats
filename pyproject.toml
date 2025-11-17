@@ -1,0 +1,12 @@
+[project]
+name = "korfballstats"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "fastapi>=0.121.2",
+    "nicegui>=2.24.2",
+    "sqlmodel>=0.0.27",
+    "uvicorn>=0.33.0",
+]
