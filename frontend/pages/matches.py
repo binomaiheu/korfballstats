@@ -33,7 +33,7 @@ def matches_page():
     async def create_new_match():
         if team_select.value and opponent_input.value.strip():
             await api_post(
-                "/matches/",
+                "/matches",
                 {
                     "team_id": team_select.value,
                     "opponent_name": opponent_input.value,
