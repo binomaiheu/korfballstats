@@ -1,14 +1,18 @@
-from sqlmodel import Session, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sqlalchemy import select
+
 from backend.models import Player
 
 
-def get_players(session: Session):
-    return session.exec(select(Player)).all()
+async def get_players(session: AsyncSession):
+    players = await session.execute(select(Player))
+    return players.scalars().all()
 
 
-def create_player(session: Session, name: str):
+async def create_player(session: AsyncSession, name: str):
     player = Player(name=name)
     session.add(player)
-    session.commit()
-    session.refresh(player)
+    await session.commit()
+    await session.refresh(player)
     return player

@@ -1,29 +1,39 @@
-from sqlmodel import Session, select
-from backend.models import Team, TeamPlayerLink, Player
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sqlalchemy import select, insert
+
+from backend.models import Team, Player, team_player_link
 
 
-def get_teams(session: Session):
-    return session.exec(select(Team)).all()
+async def get_teams(session: AsyncSession):
+    teams = await session.execute(select(Team))
+    return teams.scalars().all()
 
-
-def create_team(session: Session, name: str):
+async def create_team(session: AsyncSession, name: str):
     team = Team(name=name)
     session.add(team)
-    session.commit()
-    session.refresh(team)
+    await session.commit()
+    await session.refresh(team)
     return team
 
 
-def add_player_to_team(session: Session, team_id: int, player_id: int):
-    link = TeamPlayerLink(team_id=team_id, player_id=player_id)
-    session.add(link)
-    session.commit()
-    return link
+async def add_player_to_team(session: AsyncSession, team_id: int, player_id: int):
+    team = await session.get(Team, team_id)
+    player = await session.get(Player, player_id)
 
-def get_players_for_team(session: Session, team_id: int):
-    statement = (
+    team.players.append(player)
+    await session.commit()
+
+    return player
+
+
+async def get_players_for_team(session: AsyncSession, team_id: int):
+    stmt = (
         select(Player)
-        .join(TeamPlayerLink, Player.id == TeamPlayerLink.player_id)
-        .where(TeamPlayerLink.team_id == team_id)
+        .join(team_player_link, Player.id == team_player_link.c.player_id)
+        .where(team_player_link.c.team_id == team_id)
     )
-    return session.exec(statement).all()
+
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
