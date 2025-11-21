@@ -1,14 +1,19 @@
-from sqlmodel import Session, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sqlalchemy import select
+
 from backend.models import Match
 
 
-def get_matches(session: Session):
-    return session.exec(select(Match)).all()
+async def get_matches(session: AsyncSession):
+    matches = await session.exec(select(Match))
+    return matches.scalars().all()
 
 
-def create_match(session: Session, team_id: int, opponent_name: str):
+async def create_match(session: AsyncSession, team_id: int, opponent_name: str):
     match = Match(team_id=team_id, opponent_name=opponent_name)
     session.add(match)
-    session.commit()
-    session.refresh(match)
+    await session.commit()
+    await session.refresh(match)
     return match
+
