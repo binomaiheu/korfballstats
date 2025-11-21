@@ -23,12 +23,12 @@ async def create_event(session: AsyncSession, match_id: int, player_id: int, tea
     return event
 
 async def get_event(session: AsyncSession, event_id: int) -> Event | None:
-    statement = select(Event).where(Event.id == event_id)
+    statement = select(Event).where(Event.id == event_id).options(selectinload(Event.match), selectinload(Event.player), selectinload(Event.team))
     result = await session.execute(statement)
     return result.scalar_one_or_none()
 
 async def get_events(session: AsyncSession) -> list[Event]:
-    statement = select(Event)
+    statement = select(Event).options(selectinload(Event.match), selectinload(Event.player), selectinload(Event.team))
     results = await session.execute(statement)
     return results.scalars().all()
 

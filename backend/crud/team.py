@@ -1,12 +1,16 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select, insert
+from sqlalchemy.orm import selectinload
 
 from backend.models import Team, Player, team_player_link
 
 
 async def get_teams(session: AsyncSession):
-    teams = await session.execute(select(Team))
+    teams = await session.execute(
+        select(Team).options(selectinload(Team.players))
+    )
+
     return teams.scalars().all()
 
 async def create_team(session: AsyncSession, name: str):

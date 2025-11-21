@@ -1,12 +1,15 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from backend.models import Player
 
 
 async def get_players(session: AsyncSession):
-    players = await session.execute(select(Player))
+    players = await session.execute(
+        select(Player).options(selectinload(Player.teams))
+    )
     return players.scalars().all()
 
 

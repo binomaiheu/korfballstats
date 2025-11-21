@@ -1,12 +1,15 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from backend.models import Match
 
 
 async def get_matches(session: AsyncSession):
-    matches = await session.exec(select(Match))
+    matches = await session.execute(
+        select(Match)
+    )
     return matches.scalars().all()
 
 

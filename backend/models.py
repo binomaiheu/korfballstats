@@ -78,6 +78,10 @@ class Event(Base):
 
     timestamp: Mapped[datetime] = mapped_column(default=datetime.now)
 
+    match: Mapped["Match"] = relationship("Match")
+    player: Mapped["Player"] = relationship("Player")
+    team: Mapped["Team"] = relationship("Team")
+
 
 async def init_db():
     async with engine.begin() as conn:
