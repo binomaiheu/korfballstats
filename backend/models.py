@@ -32,18 +32,25 @@ class Team(Base):
     __tablename__ = "team"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
 
     players: Mapped[List["Player"]] = relationship("Player", secondary=team_player_link, back_populates="teams")
+    matches: Mapped[List["Match"]] = relationship("Match", back_populates="team")
 
 
 class Player(Base):
     __tablename__ = "player"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
+    number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    first_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    last_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
 
     teams: Mapped[List[Team]] = relationship("Team", secondary=team_player_link, back_populates="players")
+
+    __table_args__ = (
+        UniqueConstraint("first_name", "last_name"),
+    )
 
 
 class Match(Base):
@@ -55,6 +62,7 @@ class Match(Base):
     opponent_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    team: Mapped["Team"] = relationship("Team", back_populates="matches")
 
 class MatchLineup(Base):
     __tablename__ = "match_lineup"

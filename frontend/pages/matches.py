@@ -1,5 +1,9 @@
+import logging
+
 from nicegui import ui
 from frontend.api import api_get, api_post
+
+logger = logging.getLogger('uvicorn.error')
 
 
 def matches_page():

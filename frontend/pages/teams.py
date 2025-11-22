@@ -52,13 +52,13 @@ def teams_page():
     # ----------------------------------------------------------------------
     async def add_team():
         if new_team.value.strip():
-            await api_post("/teams/", {"name": new_team.value})
+            await api_post("/teams", {"name": new_team.value})
             new_team.value = ""
             await refresh_all()
 
     async def add_player():
         if new_player.value.strip():
-            await api_post("/players/", {"name": new_player.value})
+            await api_post("/players", {"name": new_player.value})
             new_player.value = ""
             await refresh_all()
 
