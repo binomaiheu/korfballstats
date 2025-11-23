@@ -12,7 +12,7 @@ from backend.routers.event import router as events_router
 # Import pages
 from frontend.pages.teams import teams_page
 from frontend.pages.matches import matches_page
-from frontend.pages.events import events_page
+from frontend.pages.live import live_page
 
 
 @asynccontextmanager
@@ -43,27 +43,33 @@ app.include_router(events_router, prefix="/api/v1")
 # ------------------------------------------------------------
 # Register NiceGUI pages
 # ------------------------------------------------------------
-@ui.page("/")
+@ui.page('/')
 def index():
-    ui.label("Korfball Statistics").classes("text-3xl font-bold")
-    ui.link("Teams", "/teams")
-    ui.link("Matches", "/matches")
-    ui.link("Events", "/events")
+    ui.navigate.to('/teams')
 
 
-@ui.page("/teams")
-def teams_ui():
-    teams_page()
+
+# @ui.page("/")
+# def index():
+#     ui.label("Korfball Statistics").classes("text-3xl font-bold")
+#     ui.link("Teams", "/teams")
+#     ui.link("Matches", "/matches")
+#     ui.link("Events", "/events")
 
 
-@ui.page("/matches")
-def matches_ui():
-    matches_page()
+# @ui.page("/teams")
+# def teams_ui():
+#     teams_page()
 
 
-@ui.page("/events")
-def events_ui():
-    events_page()
+# @ui.page("/matches")
+# def matches_ui():
+#     matches_page()
+
+
+# @ui.page("/events")
+# def events_ui():
+#     events_page()
 
 
 ui.run_with(app=app, mount_path='/', title="Korfball Stats")
