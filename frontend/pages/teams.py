@@ -31,13 +31,17 @@ def teams_page():
             assign_team.set_options({t["id"] : t["name"] for t in teams})
 
 
+
         async def refresh_assignment_tables():
             left_table.rows = []
             right_table.rows = []
             selected_team_id = assign_team.value
+
+
             if selected_team_id is not None:
                 team = await api_get(f"/teams/{selected_team_id}?with_players=true")
                 if team:
+                    right_table.props(f'title="Players in {team['name']}"')
                     assigned_player_ids = {p["id"] for p in team.get("players", [])}
                     all_players = await api_get("/players")
                     left_table.rows = [p for p in all_players if p["id"] not in assigned_player_ids]
@@ -276,7 +280,7 @@ def teams_page():
                         columns=columns,
                         rows=[],
                         selection='multiple',
-                        title='Players in Team'
+                        title="Players"
                     ).classes('flex-1 min-w-0')
 
 
