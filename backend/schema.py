@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 # -- Player models
 class PlayerCreate(BaseModel):
-    number: str
+    number: int
     first_name: str
     last_name: str
 

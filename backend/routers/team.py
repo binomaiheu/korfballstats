@@ -38,6 +38,14 @@ async def read_teams(with_players: bool = False, session: AsyncSession = Depends
         return [TeamRead.model_validate(team) for team in teams]
 
 
+@router.get("/{team_id}", response_model=TeamRead)
+async def read_team(team_id: int, session: AsyncSession = Depends(get_session)):
+    team = await session.get(Team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    return TeamRead.model_validate(team)
+
+
 @router.post("", response_model=TeamRead)
 async def create_team(data: TeamCreate, session: AsyncSession = Depends(get_session)):
 
@@ -58,6 +66,44 @@ async def create_team(data: TeamCreate, session: AsyncSession = Depends(get_sess
         )
 
     return team
+
+
+@router.put("/{team_id}", response_model=TeamRead)
+async def update_team(team_id: int, data: TeamCreate, session: AsyncSession = Depends(get_session)):
+    team = await session.get(Team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    for key, value in data.model_dump().items():
+        setattr(team, key, value)
+
+    try:
+        await session.commit()
+        await session.refresh(team)
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Error updating team in database"
+        )
+
+    return team
+
+@router.delete("/{team_id}", status_code=204)
+async def delete_team(team_id: int, session: AsyncSession = Depends(get_session)):
+    team = await session.get(Team, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    try:
+        await session.delete(team)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Error deleting team from database"
+        )
 
 
 @router.post("/assign", status_code=200)

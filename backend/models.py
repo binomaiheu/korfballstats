@@ -43,8 +43,8 @@ class Player(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    first_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    last_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    first_name: Mapped[str] = mapped_column(String, nullable=False)
+    last_name: Mapped[str] = mapped_column(String, nullable=False)
 
     teams: Mapped[List[Team]] = relationship("Team", secondary=team_player_link, back_populates="players")
 
