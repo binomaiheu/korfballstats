@@ -1,13 +1,15 @@
-# db.py
-from sqlmodel import SQLModel, create_engine, Session
+import os
 
-DATABASE_URL = "sqlite:///korfball.db"
-engine = create_engine(DATABASE_URL, echo=False)
+from collections.abc import AsyncGenerator
 
-def init_db():
-    SQLModel.metadata.create_all(engine)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-def get_session():
-    with Session(engine) as session:
+DATABASE_URL = "sqlite+aiosqlite:///korfball.db"
+engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"autocommit": False})
+async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_maker() as session:
         yield session
-        
+
+

@@ -3,10 +3,15 @@ name = "korfballstats"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.21.0",
     "fastapi>=0.121.2",
+    "fastapi-users[sqlalchemy]>=15.0.1",
     "nicegui>=2.24.2",
+    "pydantic>=2.12.4",
+    "python-dotenv>=1.2.1",
+    "sqlalchemy>=2.0.44",
     "sqlmodel>=0.0.27",
     "uvicorn>=0.33.0",
 ]
