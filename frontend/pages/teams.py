@@ -17,7 +17,7 @@ def teams_page():
             await refresh_team_table()
             await refresh_player_table()
             await refresh_selects()
-            await refresh_assignments()
+            # await refresh_assignments()
 
         async def refresh_team_table():
             team_table.rows = await api_get("/teams")
@@ -27,41 +27,47 @@ def teams_page():
 
         async def refresh_selects():
             teams = await api_get("/teams")
-            players = await api_get("/players")
 
             assign_team.set_options({t["id"] : t["name"] for t in teams})
-            assign_player_dropdown.set_options({p["id"] : f'{p["first_name"]} {p["last_name"]}' for p in players})
 
-        async def refresh_assignments():
-            """
-            Build a table of all player→team relations.
-            We now derive assignments from /teams/ instead of /players/,
-            because /players/ does not contain team_id.
-            """
 
-            teams = await api_get("/teams")
+        async def refresh_assignment_tables():
+            left_table.rows = []
+            right_table.rows = []
+            selected_team_id = assign_team.value
+            if selected_team_id is not None:
+                team = await api_get(f"/teams/{selected_team_id}?with_players=true")
+                if team:
+                    assigned_player_ids = {p["id"] for p in team.get("players", [])}
+                    all_players = await api_get("/players")
+                    left_table.rows = [p for p in all_players if p["id"] not in assigned_player_ids]
+                    right_table.rows = [p for p in all_players if p["id"] in assigned_player_ids]
 
-            rows = []
-            for team in teams:
-                tname = team["name"]
-                for player in team.get("players", []):
-                    rows.append({
-                        "team": tname,
-                        "player": f'{player["first_name"]} {player["last_name"]}'
-                    })
+            left_table.update()
+            right_table.update()
 
-            assignments_table.rows = rows
 
-        # ----------------------------------------------------------------------
-        # ACTION HANDLERS
-        # ----------------------------------------------------------------------
-        async def assign_handler():
-            if assign_team.value and assign_player_dropdown.value:
+
+        async def add_to_team():
+            selected_team_id = assign_team.value
+
+            for player in left_table.selected:
                 await api_post(
                     "/teams/assign",
-                    {"team_id": assign_team.value, "player_id": assign_player_dropdown.value},
+                    {"team_id": selected_team_id, "player_id": player['id']},
                 )
-                await refresh_all()
+            await refresh_assignment_tables()
+
+        async def remove_from_team():
+            selected_team_id = assign_team.value
+
+            for player in right_table.selected:
+                await api_post(
+                    "/teams/unassign",
+                    {"team_id": selected_team_id, "player_id": player['id']},
+                )
+            await refresh_assignment_tables()
+
 
 
         async def open_add_player_dialog():        
@@ -236,6 +242,45 @@ def teams_page():
         ui.markdown("Here you can enter the players in your club and assign them to different teams. The players can be assigned to multiple teams.")
 
         with ui.grid(columns=2).classes('w-full gap-4'):
+
+            # Full-width item
+            with ui.card().classes('col-span-2'):
+                # ===================================================================
+                # Assign players to teams
+                # ===================================================================
+                ui.label('Assign players')
+
+                assign_team = ui.select([], label="Select team", with_input=False, on_change=refresh_assignment_tables).classes("w-40")
+
+                # Buttons
+                with ui.row().classes('w-full justify-between gap-4'):
+                    ui.button('→ Add to Team', on_click=add_to_team)
+                    ui.button('← Remove from Team', on_click=remove_from_team)
+
+                with ui.row().classes('w-full no-wrap gap-4'):
+                    columns = [
+                        {'name': 'first_name', 'label': 'First Name', 'field': 'first_name'},
+                        {'name': 'last_name', 'label': 'Last Name', 'field': 'last_name'},
+                        {'name': 'number', 'label': 'Number', 'field': 'number'}
+                    ]
+                    # LEFT TABLE — Unassigned
+                    left_table = ui.table(
+                        columns=columns,
+                        rows=[],
+                        selection='multiple',
+                        title='Available'
+                    ).classes('flex-1 min-w-0')
+
+                    # RIGHT TABLE — Assigned to selected team
+                    right_table = ui.table(
+                        columns=columns,
+                        rows=[],
+                        selection='multiple',
+                        title='Players in Team'
+                    ).classes('flex-1 min-w-0')
+
+
+
             with ui.card():
                 # ===================================================================
                 # Manage players
@@ -309,32 +354,6 @@ def teams_page():
                 team_table.on("delete", delete_team)  # Delete handler can be implemented
                 ui.button("Add team", on_click=open_add_team_dialog)
 
-            # Full-width item
-            with ui.card().classes('col-span-2'):
-                # ===================================================================
-                # Assign players to teams
-                # ===================================================================
-                ui.label('Assign players')
-
-                with ui.row().classes('items-end'):
-                    assign_team = ui.select([], label="Team", with_input=False).classes("min-w-fit")
-                    assign_player_dropdown = ui.select([], label="Player", with_input=False).classes("min-w-fit")
-                    ui.button("Assign", on_click=assign_handler)
-
-
-                assignments_table = ui.table(
-                    columns=[
-                        {"name": "team", "label": "Team", "field": "team"},
-                        {"name": "player", "label": "Player", "field": "player"},
-                    ],
-                    rows=[],
-                    row_key="team",
-                    column_defaults={
-                        'align': 'left',
-                        'headerClasses': 'text-primary',
-                    },
-                    pagination={'rowsPerPage': 10}
-                ).classes("w-full")
 
 
         # ----------------------------------------------------------------------
