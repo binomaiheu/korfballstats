@@ -46,8 +46,8 @@ class TeamAssignPlayer(BaseModel):
 # -- Match models
 class MatchCreate(BaseModel):
     team_id: int
-    opponent_name: str
     date: Optional[datetime] = None
+    opponent_name: str
     location: Optional[str] = None
 
 
@@ -56,7 +56,14 @@ class MatchRead(BaseModel):
     team: TeamRead
     opponent_name: str
     date: datetime
-    location: str
+    location: Optional[str] = None
+
+    model_config = {
+        "from_attributes": True
+    }
+
+class MatchReadWithTeam(MatchRead):
+    team: TeamRead
 
 # -- Event models
 class Event(BaseModel):
