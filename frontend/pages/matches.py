@@ -24,10 +24,10 @@ def matches_page():
             team_select.set_options({t["id"]: t["name"] for t in teams})
 
         async def refresh_matches_table():
-            matches = await api_get("/matches?with_team=true")
+            team_id = team_select.value
+            matches = await api_get(f"/teams/{team_id}/matches") if team_id else []
             # flatten team name for the table
             for m in matches:
-                m["team_name"] = m["team"]["name"] if m.get("team") else None
                 m["date"] = m["date"][:10]  # show only date part
 
             matches_table.rows = matches
@@ -155,14 +155,12 @@ def matches_page():
         with ui.card().classes('w-full p-4 mb-4'):
 
             with ui.row().classes("items-center gap-4"):
-                team_select = ui.select([], label="Team", with_input=False).classes("w-32")
+                team_select = ui.select([], label="Team", with_input=False, on_change=refresh_matches_table).classes("w-32")
 
             with ui.row().classes("items-center"):
                 matches_table = ui.table(
                     columns=[
-                        {"name": "actions", "label": "Actions", "field": "actions", 'classes': 'auto-width no-wrap' },
-                        {"name": "id", "label": "Id", "field": "id",  "align": 'left'},
-                        {"name": "team_name", "label": "Team", "field": "team_name",  "align": 'left'},
+                        {"name": "actions", "label": "Actions", "field": "actions", 'classes': 'auto-width no-wrap' },                        
                         {"name": "date", "label": "Date", "field": "date", "sortable": True,  "align": 'left'},
                         {"name": "opponent_name", "label": "Opponent", "field": "opponent_name", "sortable": True,  "align": 'left'},
                         {"name": "location", "label": "Location", "field": "location",  "align": 'left'}

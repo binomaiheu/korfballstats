@@ -8,9 +8,9 @@ from sqlalchemy.orm import selectinload
 from typing import Union, List
 
 from backend.db import get_session
-from backend.schema import TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
+from backend.schema import TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead, MatchRead
 
-from backend.models import Team, Player, team_player_link
+from backend.models import Team, Player, team_player_link, Match
 from backend.schema import TeamRead, TeamReadWithPlayers
 
 from logging import getLogger
@@ -53,6 +53,19 @@ async def read_team(team_id: int, with_players: bool = False, session: AsyncSess
         return TeamReadWithPlayers.model_validate(team)
     else:
         return TeamRead.model_validate(team)
+    
+
+@router.get("/{team_id}/matches", response_model=List[MatchRead])
+async def read_team_matches(team_id: int, session: AsyncSession = Depends(get_session)):
+
+    query = select(Match)\
+        .options(selectinload(Match.team))\
+        .where(Match.team_id == team_id)
+
+    matches = await session.execute(query)
+    matches = matches.scalars().all()
+
+    return [MatchRead.model_validate(match) for match in matches]
 
 
 @router.post("", response_model=TeamRead)
