@@ -2,6 +2,18 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
+from enum import Enum
+
+class ActionType(str, Enum):
+    SHOT = "shot"
+    KORTE_KANS = "korte_kans"
+    VRIJWORP = "vrijworp"
+    STRAFWORP = "strafworp"
+    INLOPER = "inloper"
+    REBOUND = "rebound"
+    ASSIST = "assist"
+    STEAL = "steal"
+
 
 # -- Player models
 class PlayerCreate(BaseModel):
@@ -62,21 +74,22 @@ class MatchRead(BaseModel):
         "from_attributes": True
     }
 
-class MatchReadWithTeam(MatchRead):
-    team: TeamRead
-
 # -- Event models
-class Event(BaseModel):
-    id: int
+class Action(BaseModel):
     match_id: int
     player_id: int
-    team_id: int
-    type: str
-    value: int
 
-class EventCreate(BaseModel):
-    match_id: int
-    player_id: int
-    team_id: int
-    type: str
-    value: int
+    timestamp: int
+    period: int
+    action: ActionType
+    result: Optional[bool] = False
+
+class ActionCreate(Action):
+    pass
+
+class ActionRead(Action):
+    id: int
+
+    model_config = {
+        "from_attributes": True
+    }

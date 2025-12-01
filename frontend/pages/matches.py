@@ -28,6 +28,7 @@ def matches_page():
             matches = await api_get(f"/teams/{team_id}/matches") if team_id else []
             # flatten team name for the table
             for m in matches:
+                m["team_name"] = m["team"]["name"] if m.get("team") else "N/A"
                 m["date"] = m["date"][:10]  # show only date part
 
             matches_table.rows = matches
@@ -70,11 +71,11 @@ def matches_page():
             with ui.dialog().classes('w-2/3') as dialog, ui.card().classes('w-full'):
                 ui.label(f'Add new {team_label} match').classes('text-xl mb-2')
                 with ui.row().classes('w-full'):
-                    match_date = ui.date_input('Match Date').classes('w-70')
-                    opponent_input = ui.input('Opponent Name').classes('w-70')
-                    location_input = ui.input('Location').classes('w-70')
+                    match_date_diag = ui.date_input('Match Date').classes('w-70')
+                    opponent_input_diag = ui.input('Opponent Name').classes('w-70')
+                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-70')
                 with ui.row():
-                    ui.button('Save', on_click=lambda: create_new_match(team_select.value, match_date.value, opponent_input.value, location_input.value, dialog))
+                    ui.button('Save', on_click=lambda: create_new_match(team_select.value, match_date_diag.value, opponent_input_diag.value, location_input_diag.value, dialog))
                     ui.button('Cancel', on_click=dialog.close)
             dialog.open()
 
@@ -89,16 +90,16 @@ def matches_page():
                 ui.label('Edit match').classes('text-xl mb-2')
                 with ui.row().classes('w-full'):
                     team_options = {team['id']: team['name'] for team in await api_get("/teams")}
-                    team_select = ui.select(team_options, label="Team", with_input=False).classes("w-32")
-                    team_select.set_value(match['team']['id'] if match.get('team') else None)
-                    match_date = ui.date_input('Match Date').classes('w-70')
-                    match_date.set_value(match['date'])
-                    opponent_input = ui.input('Opponent Name').classes('w-70')
-                    opponent_input.set_value(match['opponent_name'])
-                    location_input = ui.input('Location').classes('w-70')
-                    location_input.set_value(match['location'])
+                    team_select_diag = ui.select(team_options, label="Team", with_input=False).classes("w-32")
+                    team_select_diag.set_value(match['team']['id'] if match.get('team') else None)
+                    match_date_diag = ui.date_input('Match Date').classes('w-70')
+                    match_date_diag.set_value(match['date'])
+                    opponent_input_diag = ui.input('Opponent Name').classes('w-70')
+                    opponent_input_diag.set_value(match['opponent_name'])
+                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-70')
+                    location_input_diag.set_value(match['location'])
                 with ui.row():
-                    ui.button('Save', on_click=lambda: save_edited_match(match['id'], team_select.value, match_date.value, opponent_input.value, location_input.value, dialog))
+                    ui.button('Save', on_click=lambda: save_edited_match(match['id'], team_select_diag.value, match_date_diag.value, opponent_input_diag.value, location_input_diag.value, dialog))
                     ui.button('Cancel', on_click=dialog.close)
             dialog.open()
 
@@ -160,7 +161,8 @@ def matches_page():
             with ui.row().classes("items-center"):
                 matches_table = ui.table(
                     columns=[
-                        {"name": "actions", "label": "Actions", "field": "actions", 'classes': 'auto-width no-wrap' },                        
+                        {"name": "actions", "label": "Actions", "field": "actions", 'classes': 'auto-width no-wrap' },
+                        {"name": "team", "label": "Team", "field": "team_name", "sortable": True, "align": 'left'},
                         {"name": "date", "label": "Date", "field": "date", "sortable": True,  "align": 'left'},
                         {"name": "opponent_name", "label": "Opponent", "field": "opponent_name", "sortable": True,  "align": 'left'},
                         {"name": "location", "label": "Location", "field": "location",  "align": 'left'}

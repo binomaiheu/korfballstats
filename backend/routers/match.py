@@ -8,10 +8,8 @@ from sqlalchemy.orm import selectinload
 from typing import Union, List
 
 from backend.db import get_session
-from backend.schema import MatchReadWithTeam, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
-
+from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 from backend.models import Match
-from backend.schema import MatchCreate, MatchRead
 
 from logging import getLogger
 
@@ -21,20 +19,15 @@ logger = getLogger('uvicorn.error')
 router = APIRouter(prefix="/matches", tags=["Matches"])
 
 
-@router.get("", response_model=Union[List[MatchRead], List[MatchReadWithTeam]])
+@router.get("", response_model=List[MatchRead])
 async def read_matches(with_team: bool = False, session: AsyncSession = Depends(get_session)):
 
-    query = select(Match)
-    if with_team:
-        query = query.options(selectinload(Match.team))
+    query = select(Match).options(selectinload(Match.team))
 
     result = await session.execute(query)
     matches = result.scalars().all()
 
-    if with_team:
-        return [MatchReadWithTeam.model_validate(match) for match in matches]
-    else:   
-        return [MatchRead.model_validate(match) for match in matches]
+    return [MatchRead.model_validate(match) for match in matches]
 
 
 @router.post("", response_model=MatchRead)

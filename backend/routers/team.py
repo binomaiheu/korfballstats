@@ -211,7 +211,7 @@ async def list_team_players(team_id: int, session: AsyncSession = Depends(get_se
         select(Player)
         .join(team_player_link, Player.id == team_player_link.c.player_id)
         .where(team_player_link.c.team_id == team_id)
-        .order_by(Player.name)
+        .order_by(Player.last_name)
     )
 
     result = await session.execute(stmt)

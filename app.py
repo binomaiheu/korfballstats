@@ -7,7 +7,7 @@ from backend.models import init_db
 from backend.routers.team import router as teams_router
 from backend.routers.player import router as players_router
 from backend.routers.match import router as matches_router
-from backend.routers.event import router as events_router
+from backend.routers.action import router as events_router
 
 # Import pages
 from frontend.pages.teams import teams_page
