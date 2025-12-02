@@ -30,10 +30,13 @@ class ToggleButton(ui.button):
 
     def update(self) -> None:
         """Update the button's appearance based on its state."""
+
         with self.props.suspend_updates():
             if not self._active:
                 self.props(f'color="blue"')
+                self.disable()
             else:
+                self.enable()
                 if self._selected:
                     self.props(f'color="red"')
                 else:
@@ -113,6 +116,50 @@ def live_page():
             except Exception:
                 return []
 
+
+        # ---------------------------------------------------------
+        # GAME CLOCK LOGIC
+        # ---------------------------------------------------------
+
+
+        # the ui dialog
+        with ui.dialog() as set_time_dialog:
+            with ui.card():
+                ui.label("Set Time (Seconds)")
+                set_time_number = ui.number(value=state.clock_seconds)
+                
+                def save():
+                    state.clock_seconds = int(set_time_number.value)
+                    clock_area.refresh()
+                    set_time_dialog.close()
+                
+                ui.button("Set", on_click=save)
+
+        def toggle_clock():
+            state.clock_running = not state.clock_running
+            clock_area.refresh()
+
+        def tick():
+            if state.clock_running:
+                state.clock_seconds += 1
+                # Here we could theoretically update playtime for active_player_ids
+                # But we don't have a DB model for it, so we just update the visual clock
+                if clock_display:
+                    clock_display.text = state.formatted_time
+
+        def reset_clock():
+            state.clock_running = False
+            state.clock_seconds = 0
+            clock_area.refresh()
+
+        def set_clock_dialog():
+            set_time_number.value = state.clock_seconds
+            set_time_dialog.open()
+        
+        # create the timer
+        state.timer = ui.timer(1.0, tick)
+
+        
         # ---------------------------------------------------------------
         # UI UPDATE HANDLERS
         # ---------------------------------------------------------------
@@ -139,6 +186,7 @@ def live_page():
 
             logger.info(f"Switching match to {match_id}")
             if match_id is None:
+                clock_area.refresh()
                 return
             
             # Load players
@@ -146,6 +194,7 @@ def live_page():
             state.active_player_ids = set()  # Reset active players
 
             render_players(state.players)
+            clock_area.refresh()
 
 
         # simple handler for clicking a player button (when enabled)
@@ -154,27 +203,47 @@ def live_page():
             if player_id not in state.active_player_ids:
                 return
 
-            state.selected_player_id = player_id
+            if state.selected_player_id == player_id:
+                # Deselect if already selected
+                state.selected_player_id = None
+                logger.info(f"Deselected player {player_id}")
+            else:
+                # Select this player
+                state.selected_player_id = player_id
+                logger.info(f"Selected player {player_id}")
 
-            # Notify
-            logger.info(f"Selected player {player_id}")
 
             # Re-render buttons (lightweight refresh)
             render_players(state.players)
 
 
+        # Switch handler
+        async def on_switch_handler(e, pid, button):
+            is_active = bool(e.value)
+            button._active = is_active
+
+            if is_active:
+                state.active_player_ids.add(pid)
+            else:
+                state.active_player_ids.discard(pid)
+            
+            button.update() 
+
+
         def render_players(players):
             players_column.clear()
-
+ 
             for p in players:
                 player_id = p["id"]
                 player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
                 is_active = player_id in state.active_player_ids
                 is_selected = (state.selected_player_id == player_id)
 
+
                 # Create button
                 with players_column:
                     with ui.row().classes("items-center gap-4"):
+
                         # Create the ToggleButton
                         btn = ToggleButton(
                             player_id=player_id,
@@ -182,23 +251,48 @@ def live_page():
                             active=is_active,
                             selected=is_selected,
                             on_click=on_player_button_click,
-                        )
+                        ).classes("w-32 items-start")
+                        
+                        # Use lambda with default arguments to freeze the values of player_id and btn
+                        ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
 
-                        # Switch handler
-                        async def switch_handler(e, pid=player_id, button=btn):
-                            is_active = bool(e.value)
-                            button._active = is_active               # ← FIX
-                            button.update()                          # ← Important!
+                        # playtime
+                        ui.label(0)
+ 
+        # ---------------------------------------------------------
+        # UI COMPONENTS (REFRESHABLE)
+        # ---------------------------------------------------------
+        @ui.refreshable
+        def clock_area():
+            if not state.selected_match_id:
+                ui.label("No match selected").classes("text-xs font-bold text-grey-6")
+                return
 
-                            if is_active:
-                                state.active_player_ids.add(pid)
-                                button.enable()
-                            else:
-                                state.active_player_ids.discard(pid)
-                                button.disable()
+            with ui.card().classes('w-full items-center bg-grey-2'):
+                ui.label("GAME CLOCK").classes("text-xs font-bold text-grey-6")
+                
+                with ui.row().classes("items-center"):
+                    # Period Controls
+                    ui.button("-", on_click=lambda: setattr(state, 'period', max(1, state.period - 1)) or clock_area.refresh()).props("round sm")
+                    ui.label(f"P{state.period}").classes("text-xl font-bold mx-2")
+                    ui.button("+", on_click=lambda: setattr(state, 'period', state.period + 1) or clock_area.refresh()).props("round sm")
+                    
+                    ui.separator().props("vertical").classes("mx-4")
+                    
+                    # Time Display
+                    global clock_display
+                    clock_display = ui.label(state.formatted_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
+                    
+                    ui.separator().props("vertical").classes("mx-4")
 
-                        ui.switch(value=is_active, on_change=switch_handler)
-            
+                    # Controls
+                    if state.clock_running:
+                        ui.button("PAUSE", on_click=toggle_clock, color="warning", icon="pause")
+                    else:
+                        ui.button("START", on_click=toggle_clock, color="positive", icon="play_arrow")
+                    
+
+          
 
         # ---------------------------------------------------------------
         # UI LAYOUT
@@ -220,13 +314,23 @@ def live_page():
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
             ).classes("w-48")  # Make the select wider
+   
+            with ui.button(icon="settings", color="grey").props("flat round"):
+                with ui.menu():
+                    ui.menu_item("Set Time", on_click=set_clock_dialog)
+                    ui.menu_item("Reset", on_click=reset_clock) 
 
-        with ui.row().classes("mt-6 gap-8"):
-            ui.markdown("### Players for team").classes("mt-4")
-            # container where team players will appear
-        
+
         with ui.row():
-            players_column = ui.column()
+            clock_area()
+
+        with ui.row():
+            with ui.card():
+                ui.label("Players")
+                players_column = ui.column()
+            with ui.card():
+                ui.label("Actions")
+                action_column = ui.column()
 
         # ---------------------------------------------------------------
         # INITIAL LOAD
