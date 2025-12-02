@@ -67,11 +67,17 @@ class LiveState:
         self.period: int = 1
         self.timer = None
 
+        self.player_seconds: dict[int, int] = {}
+
     @property
     def formatted_time(self):
         mins, secs = divmod(self.clock_seconds, 60)
         return f"{mins:02d}:{secs:02d}"
-
+    
+    def formatted_player_time(self, player_id):
+        secs = state.player_seconds.get(player_id, 0)
+        m, s = divmod(secs, 60)
+        return f'{m:02d}:{s:02d}'
 
 state = LiveState()
 
@@ -147,6 +153,11 @@ def live_page():
                 if clock_display:
                     clock_display.text = state.formatted_time
 
+                # per-player clocks
+                for pid in state.active_player_ids:
+                    state.player_seconds[pid] = state.player_seconds.get(pid, 0) + 1
+
+
         def reset_clock():
             state.clock_running = False
             state.clock_seconds = 0
@@ -159,7 +170,7 @@ def live_page():
         # create the timer
         state.timer = ui.timer(1.0, tick)
 
-        
+
         # ---------------------------------------------------------------
         # UI UPDATE HANDLERS
         # ---------------------------------------------------------------
@@ -257,7 +268,7 @@ def live_page():
                         ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
 
                         # playtime
-                        ui.label(0)
+                        ui.label().bind_text_from(state.player_seconds, player_id, lambda secs: f"{secs // 60:02d}:{secs % 60:02d}").classes("text-xs text-grey-6")
  
         # ---------------------------------------------------------
         # UI COMPONENTS (REFRESHABLE)
@@ -297,7 +308,6 @@ def live_page():
         # ---------------------------------------------------------------
         # UI LAYOUT
         # ---------------------------------------------------------------
-
         ui.markdown("### 🏷️ Match Actions")
 
         with ui.row().classes("items-center gap-4"):
@@ -326,10 +336,10 @@ def live_page():
 
         with ui.row():
             with ui.card():
-                ui.label("Players")
+                ui.label("Players").classes("text-xs font-bold text-grey-6")
                 players_column = ui.column()
             with ui.card():
-                ui.label("Actions")
+                ui.label("Actions").classes("text-xs font-bold text-grey-6")
                 action_column = ui.column()
 
         # ---------------------------------------------------------------
