@@ -2,19 +2,12 @@ from sqlalchemy import Boolean, Integer, String, UniqueConstraint, ForeignKey, E
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from typing import Optional, List
-from enum import Enum as PyEnum
 from datetime import datetime
 
+
+from .schema import ActionType
 from .db import engine
 
-
-class EventType(str, PyEnum):
-    GOAL = "goal"
-    GOAL_FREE_THROW = "goal_free_throw"
-    GOAL_INSIDE = "goal_inside"
-    SHOT = "shot"
-    FOUL = "foul"
-    PENALTY = "penalty"
 
 
 class Base(DeclarativeBase):
@@ -61,34 +54,41 @@ class Match(Base):
     team_id: Mapped[int] = mapped_column(ForeignKey("team.id"))
     opponent_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # binnen/buiten
+
 
     team: Mapped["Team"] = relationship("Team", back_populates="matches")
 
-class MatchLineup(Base):
-    __tablename__ = "match_lineup"
 
-    match_id: Mapped[int] = mapped_column(ForeignKey("match.id"), primary_key=True)
-    player_id: Mapped[int] = mapped_column(ForeignKey("player.id"), primary_key=True)
-    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"))
-
-
-class Event(Base):
-    __tablename__ = "event"
+class Action(Base):
+    __tablename__ = "action"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     match_id: Mapped[int] = mapped_column(ForeignKey("match.id"))
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
-    team_id: Mapped[int] = mapped_column(ForeignKey("team.id"))
 
-    type: Mapped[EventType] = mapped_column(Enum(EventType))
-    value: Mapped[int] = mapped_column(Integer)
-
-    timestamp: Mapped[datetime] = mapped_column(default=datetime.now)
-
+    timestamp: Mapped[int] = mapped_column()
+    period: Mapped[int] = mapped_column()
+    action: Mapped[ActionType] = mapped_column(Enum(ActionType))
+    result: Mapped[bool] = mapped_column(Boolean, default=False)
+ 
     match: Mapped["Match"] = relationship("Match")
     player: Mapped["Player"] = relationship("Player")
-    team: Mapped["Team"] = relationship("Team")
+
+
+class Playtime(Base):
+    __tablename__ = "playtime"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    match_id: Mapped[int] = mapped_column(ForeignKey("match.id"))
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
+
+    time_played: Mapped[int] = mapped_column(default=0)  # in seconds
+ 
+    match: Mapped["Match"] = relationship("Match")
+    player: Mapped["Player"] = relationship("Player")
 
 
 async def init_db():

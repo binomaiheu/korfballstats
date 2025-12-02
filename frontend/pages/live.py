@@ -4,231 +4,350 @@ from nicegui import ui
 from frontend.api import api_get, api_post
 from frontend.layout import apply_layout
 
+from typing import Dict, List, Optional
+
 logger = logging.getLogger('uvicorn.error')
 
-EVENT_TYPES = [
-    ("goal", "Goal"),
-    ("goal_free_throw", "Free Throw"),
-    ("goal_inside", "Inside"),
-    ("shot", "Shot"),
-    ("foul", "Foul"),
-    ("penalty", "Penalty"),
-]
+
+
+class ToggleButton(ui.button):
+    def __init__(self, player_id, player_name, active, selected, on_click, *args, **kwargs):
+        self.player_id = player_id
+        self._active = active # player is on the field
+        self._selected = selected # player is select for inputting
+        self._on_click = on_click
+        super().__init__(player_name, *args, **kwargs)
+        self.on('click', self.toggle)
+
+        # Set the initial state
+        self.update()
+
+    def toggle(self) -> None:
+        """Handle button click and toggle the state."""
+        if not self._active:
+            return  # Ignore clicks if the button is disabled
+        self._on_click(self.player_id)  # Call the provided click handler
+
+    def update(self) -> None:
+        """Update the button's appearance based on its state."""
+
+        with self.props.suspend_updates():
+            if not self._active:
+                self.props(f'color="blue"')
+                self.disable()
+            else:
+                self.enable()
+                if self._selected:
+                    self.props(f'color="red"')
+                else:
+                    self.props(f'color="green"')
+        super().update()
+
+
+class LiveState:
+    """
+    Represents the state of the live match.
+    """
+
+    def __init__(self):
+        self.players: List = []
+
+        # Current Selections
+        self.selected_team_id: Optional[int] = None
+        self.selected_match_id: Optional[Dict] = None
+        self.selected_player_id: Optional[int] = None
+
+        # Game Data
+        self.actions: List = []
+        self.active_player_ids: set = set()
+
+        # Clock State
+        self.clock_running: bool = False
+        self.clock_seconds: int = 0
+        self.period: int = 1
+        self.timer = None
+
+        self.player_seconds: dict[int, int] = {}
+
+    @property
+    def formatted_time(self):
+        mins, secs = divmod(self.clock_seconds, 60)
+        return f"{mins:02d}:{secs:02d}"
+    
+    def formatted_player_time(self, player_id):
+        secs = state.player_seconds.get(player_id, 0)
+        m, s = divmod(secs, 60)
+        return f'{m:02d}:{s:02d}'
+
+state = LiveState()
+
 
 @ui.page('/live')
 def live_page():
 
     def content():
 
-        # ---------------------------
-        # STATE
-        # ---------------------------
-        state = {
-            "matches": [],
-            "teams": {},
-            "events": [],
-            "players": [],
-            "selected_match": None,
-            "selected_team_id": None,
-            "selected_player_id": None,
-        }
-
-        # ---------------------------
-        # LOAD HELPERS
-        # ---------------------------
-
-        async def load_matches():
-            state["matches"] = await api_get("/matches")
-            match_select.set_options({
-                m["id"]: f'{m.get("date", "")[:10]} — {m.get("opponent_name", "")} (Team {m["team_id"]})'
-                for m in state["matches"]
-            })
+        # ---------------------------------------------------------------
+        # HELPERS
+        # ---------------------------------------------------------------
 
         async def load_teams():
             teams = await api_get("/teams")
-            state["teams"] = {t["id"]: t for t in teams}
             team_select.set_options({t["id"]: t["name"] for t in teams})
 
             # keep selected team if possible
-            if state["selected_team_id"] in state["teams"]:
-                team_select.value = state["selected_team_id"]
+            if state.selected_team_id in [t["id"] for t in teams]:
+                team_select.value = state.selected_team_id
 
-        async def load_events():
-            try:
-                state["events"] = await api_get("/events")
-            except Exception:
-                state["events"] = []
+        async def load_matches(team_id=None):
+            """
+            Load matches. If team_id is given: filter only that team's matches.
+            """
+            if team_id:
+                matches = await api_get(f"/teams/{team_id}/matches")
+            else:
+                matches = await api_get("/matches")
+
+            match_select.set_options({
+                m["id"]: f'{m.get("date", "")[:10]} — {m.get("opponent_name", "")} ({m["team"]["name"]})'
+                for m in matches
+            })
+
+            # reset selection
+            match_select.value = None
 
         async def load_team_players(team_id: int):
-            """Your backend must expose /teams/<id>/players"""
             try:
                 return await api_get(f"/teams/{team_id}/players")
             except Exception:
                 return []
 
-        # ---------------------------
-        # UI HELPERS
-        # ---------------------------
 
-        def render_player_buttons():
-            players_grid.clear()
-            with players_grid:
-                for p in state["players"]:
-                    pid = p["id"]
-                    classes = "q-pa-xs"
-                    if pid == state["selected_player_id"]:
-                        classes += " bg-red text-white"   # <-- make selected player red
+        # ---------------------------------------------------------
+        # GAME CLOCK LOGIC
+        # ---------------------------------------------------------
+
+
+        # the ui dialog
+        with ui.dialog() as set_time_dialog:
+            with ui.card():
+                ui.label("Set Time (Seconds)")
+                set_time_number = ui.number(value=state.clock_seconds)
+                
+                def save():
+                    state.clock_seconds = int(set_time_number.value)
+                    clock_area.refresh()
+                    set_time_dialog.close()
+                
+                ui.button("Set", on_click=save)
+
+        def toggle_clock():
+            state.clock_running = not state.clock_running
+            clock_area.refresh()
+
+        def tick():
+            if state.clock_running:
+                state.clock_seconds += 1
+                # Here we could theoretically update playtime for active_player_ids
+                # But we don't have a DB model for it, so we just update the visual clock
+                if clock_display:
+                    clock_display.text = state.formatted_time
+
+                # per-player clocks
+                for pid in state.active_player_ids:
+                    state.player_seconds[pid] = state.player_seconds.get(pid, 0) + 1
+
+
+        def reset_clock():
+            state.clock_running = False
+            state.clock_seconds = 0
+            clock_area.refresh()
+
+        def set_clock_dialog():
+            set_time_number.value = state.clock_seconds
+            set_time_dialog.open()
+        
+        # create the timer
+        state.timer = ui.timer(1.0, tick)
+
+
+        # ---------------------------------------------------------------
+        # UI UPDATE HANDLERS
+        # ---------------------------------------------------------------
+
+        async def on_team_change(team_id):
+            state.selected_team_id = team_id
+
+            logger.info(f"Switching team to {team_id}")
+            # Load matches for this team
+            await load_matches(team_id)
+
+            # Reset selected player & match
+            state.selected_match_id = None
+            state.selected_player_id = None
+            state.active_player_ids.clear()
+            state.players = [] # Clear players            
+
+            players_column.clear()
+
+
+        async def on_match_change(match_id):
+            state.selected_match_id = match_id
+            players_column.clear()
+
+            logger.info(f"Switching match to {match_id}")
+            if match_id is None:
+                clock_area.refresh()
+                return
+            
+            # Load players
+            state.players = await load_team_players(state.selected_team_id)
+            state.active_player_ids = set()  # Reset active players
+
+            render_players(state.players)
+            clock_area.refresh()
+
+
+        # simple handler for clicking a player button (when enabled)
+        def on_player_button_click(player_id):
+            # If inactive → ignore click
+            if player_id not in state.active_player_ids:
+                return
+
+            if state.selected_player_id == player_id:
+                # Deselect if already selected
+                state.selected_player_id = None
+                logger.info(f"Deselected player {player_id}")
+            else:
+                # Select this player
+                state.selected_player_id = player_id
+                logger.info(f"Selected player {player_id}")
+
+
+            # Re-render buttons (lightweight refresh)
+            render_players(state.players)
+
+
+        # Switch handler
+        async def on_switch_handler(e, pid, button):
+            is_active = bool(e.value)
+            button._active = is_active
+
+            if is_active:
+                state.active_player_ids.add(pid)
+            else:
+                state.active_player_ids.discard(pid)
+            
+            button.update() 
+
+
+        def render_players(players):
+            players_column.clear()
+ 
+            for p in players:
+                player_id = p["id"]
+                player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
+                is_active = player_id in state.active_player_ids
+                is_selected = (state.selected_player_id == player_id)
+
+
+                # Create button
+                with players_column:
+                    with ui.row().classes("items-center gap-4"):
+
+                        # Create the ToggleButton
+                        btn = ToggleButton(
+                            player_id=player_id,
+                            player_name=player_name,
+                            active=is_active,
+                            selected=is_selected,
+                            on_click=on_player_button_click,
+                        ).classes("w-32 items-start")
+                        
+                        # Use lambda with default arguments to freeze the values of player_id and btn
+                        ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
+
+                        # playtime
+                        ui.label().bind_text_from(state.player_seconds, player_id, lambda secs: f"{secs // 60:02d}:{secs % 60:02d}").classes("text-xs text-grey-6")
+ 
+        # ---------------------------------------------------------
+        # UI COMPONENTS (REFRESHABLE)
+        # ---------------------------------------------------------
+        @ui.refreshable
+        def clock_area():
+            if not state.selected_match_id:
+                ui.label("No match selected").classes("text-xs font-bold text-grey-6")
+                return
+
+            with ui.card().classes('w-full items-center bg-grey-2'):
+                ui.label("GAME CLOCK").classes("text-xs font-bold text-grey-6")
+                
+                with ui.row().classes("items-center"):
+                    # Period Controls
+                    ui.button("-", on_click=lambda: setattr(state, 'period', max(1, state.period - 1)) or clock_area.refresh()).props("round sm")
+                    ui.label(f"P{state.period}").classes("text-xl font-bold mx-2")
+                    ui.button("+", on_click=lambda: setattr(state, 'period', state.period + 1) or clock_area.refresh()).props("round sm")
+                    
+                    ui.separator().props("vertical").classes("mx-4")
+                    
+                    # Time Display
+                    global clock_display
+                    clock_display = ui.label(state.formatted_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
+                    
+                    ui.separator().props("vertical").classes("mx-4")
+
+                    # Controls
+                    if state.clock_running:
+                        ui.button("PAUSE", on_click=toggle_clock, color="warning", icon="pause")
                     else:
-                        classes += " bg-grey-3 text-black"          # optional: light background for others
+                        ui.button("START", on_click=toggle_clock, color="positive", icon="play_arrow")
+                    
 
-                    ui.button(
-                        p["name"],
-                        on_click=lambda e, pid=pid: select_player(pid),
-                    ).classes(classes)
+          
 
-        def select_player(pid: int):
-            state["selected_player_id"] = pid
-            render_player_buttons()
-
-        # ---------------------------
-        # STATS AGGREGATION
-        # ---------------------------
-
-        def aggregate_stats(match_id: int, team_id: int):
-            players = state["players"]
-            et_keys = [key for key, _ in EVENT_TYPES]
-
-            totals = {
-                p["id"]: {
-                    **{k: 0 for k in et_keys},
-                    "player_name": p["name"],
-                }
-                for p in players
-            }
-
-            for e in state["events"]:
-                try:
-                    if int(e.get("match_id")) != match_id:
-                        continue
-                    if int(e.get("team_id")) != team_id:
-                        continue
-                except Exception:
-                    continue
-
-                pid = e.get("player_id")
-                et = e.get("type")
-                val = int(e.get("value", 0))
-
-                if pid in totals and et in totals[pid]:
-                    totals[pid][et] += val
-
-            rows = []
-            for pid, d in totals.items():
-                row = {"player_name": d["player_name"], "player_id": pid}
-                for et in et_keys:
-                    row[et] = d[et]
-                rows.append(row)
-            return rows
-
-        # ---------------------------
-        # EVENT HANDLERS
-        # ---------------------------
-
-        async def on_match_change(match_id: int):
-            sel = next((m for m in state["matches"] if m["id"] == match_id), None)
-            state["selected_match"] = sel
-
-            if not sel:
-                players_grid.clear()
-                stats_table.rows = []
-                return
-
-            # set team
-            state["selected_team_id"] = sel["team_id"]
-            team_select.value = sel["team_id"]
-
-            # load players
-            state["players"] = await load_team_players(sel["team_id"])
-            render_player_buttons()
-
-            # auto-select first player
-            if state["players"]:
-                state["selected_player_id"] = state["players"][0]["id"]
-                render_player_buttons()
-
-            # update stats
-            stats_table.rows = aggregate_stats(sel["id"], sel["team_id"])
-
-        async def post_event(event_type: str, value: int):
-            if not state["selected_match"] or not state["selected_player_id"]:
-                ui.notify("Select a match and a player first", color="warning")
-                return
-
-            payload = {
-                "match_id": state["selected_match"]["id"],
-                "player_id": state["selected_player_id"],
-                "team_id": state["selected_team_id"],
-                "type": event_type,
-                "value": value,
-            }
-
-            try:
-                print(payload)
-                created = await api_post("/events", payload)
-                state["events"].append(created)
-                stats_table.rows = aggregate_stats(
-                    payload["match_id"], payload["team_id"]
-                )
-            except Exception as e:
-                ui.notify(f"Failed to post event: {e}", color="negative")
-
-        async def refresh_all():
-            await load_matches()
-            await load_teams()
-            await load_events()
-            if state["selected_match"]:
-                await on_match_change(state["selected_match"]["id"])
-
-        # ---------------------------
+        # ---------------------------------------------------------------
         # UI LAYOUT
-        # ---------------------------
-
-        ui.markdown("## 🏷️ Match Events")
+        # ---------------------------------------------------------------
+        ui.markdown("### 🏷️ Match Actions")
 
         with ui.row().classes("items-center gap-4"):
+            team_select = ui.select(
+                {},
+                label="Select team",
+                with_input=False,
+                on_change=lambda e: on_team_change(e.value),
+            ).classes("w-32")  # Make the select wider
+
             match_select = ui.select(
-                [],
+                {},
                 label="Select match",
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
-            )
-            team_select = ui.select([], label="Team", with_input=False).props("readonly")
-            ui.button("Refresh", on_click=refresh_all)
+            ).classes("w-48")  # Make the select wider
+   
+            with ui.button(icon="settings", color="grey").props("flat round"):
+                with ui.menu():
+                    ui.menu_item("Set Time", on_click=set_clock_dialog)
+                    ui.menu_item("Reset", on_click=reset_clock) 
 
-        ui.separator()
 
-        ui.markdown("### 👥 Players")
-        players_grid = ui.row().classes("gap-2 wrap")
+        with ui.row():
+            clock_area()
 
-        ui.separator()
+        with ui.row():
+            with ui.card():
+                ui.label("Players").classes("text-xs font-bold text-grey-6")
+                players_column = ui.column()
+            with ui.card():
+                ui.label("Actions").classes("text-xs font-bold text-grey-6")
+                action_column = ui.column()
 
-        ui.markdown("### 🎯 Events")
-        with ui.row().classes("items-center gap-2"):
-            for key, label in EVENT_TYPES:
-                ui.button(f"+ {label}", on_click=lambda k=key: post_event(k, 1)).props("size=small")
-                ui.button(f"- {label}", on_click=lambda k=key: post_event(k, -1)).props("size=small")
-
-        ui.separator()
-
-        ui.markdown("### 📊 Statistics (per player)")
-        cols = [{"name": "player_name", "label": "Player", "field": "player_name"}]
-        for key, label in EVENT_TYPES:
-            cols.append({"name": key, "label": label, "field": key})
-
-        stats_table = ui.table(columns=cols, rows=[], row_key="player_id").classes("w-full mt-4")
+        # ---------------------------------------------------------------
+        # INITIAL LOAD
+        # ---------------------------------------------------------------
+        async def refresh_all():
+            await load_teams()
 
         ui.timer(0, refresh_all, once=True)
 
-
-    # set layout
     apply_layout(content)

@@ -17,7 +17,7 @@ def teams_page():
             await refresh_team_table()
             await refresh_player_table()
             await refresh_selects()
-            # await refresh_assignments()
+            await refresh_assignment_tables()
 
         async def refresh_team_table():
             team_table.rows = await api_get("/teams")
@@ -332,8 +332,8 @@ def teams_page():
                 team_table = ui.table(
                     columns=[
                         {'name': 'actions', 'label': 'Actions', 'field': 'id', 'classes': 'auto-width no-wrap'},
-                        {"name": "id", "label": "ID", "field": "id"},
-                        {"name": "name", "label": "Name", "field": "name"}
+                        {"name": "id", "label": "Id", "field": "id", "align": 'left'},
+                        {"name": "name", "label": "Name", "field": "name",  "align": 'left'}
                     ],
                     rows=[],
                     row_key="id",
