@@ -9,6 +9,38 @@ from typing import Dict, List, Optional
 logger = logging.getLogger('uvicorn.error')
 
 
+
+class ToggleButton(ui.button):
+    def __init__(self, player_id, player_name, active, selected, on_click, *args, **kwargs):
+        self.player_id = player_id
+        self._active = active # player is on the field
+        self._selected = selected # player is select for inputting
+        self._on_click = on_click
+        super().__init__(player_name, *args, **kwargs)
+        self.on('click', self.toggle)
+
+        # Set the initial state
+        self.update()
+
+    def toggle(self) -> None:
+        """Handle button click and toggle the state."""
+        if not self._active:
+            return  # Ignore clicks if the button is disabled
+        self._on_click(self.player_id)  # Call the provided click handler
+
+    def update(self) -> None:
+        """Update the button's appearance based on its state."""
+        with self.props.suspend_updates():
+            if not self._active:
+                self.props(f'color="blue"')
+            else:
+                if self._selected:
+                    self.props(f'color="red"')
+                else:
+                    self.props(f'color="green"')
+        super().update()
+
+
 class LiveState:
     """
     Represents the state of the live match.
@@ -19,7 +51,7 @@ class LiveState:
 
         # Current Selections
         self.selected_team_id: Optional[int] = None
-        self.selected_match: Optional[Dict] = None
+        self.selected_match_id: Optional[Dict] = None
         self.selected_player_id: Optional[int] = None
 
         # Game Data
@@ -60,7 +92,7 @@ def live_page():
 
         async def load_matches(team_id=None):
             """
-            Load matches. If team_id is given: filter only that team’s matches.
+            Load matches. If team_id is given: filter only that team's matches.
             """
             if team_id:
                 matches = await api_get(f"/teams/{team_id}/matches")
@@ -88,46 +120,75 @@ def live_page():
         async def on_team_change(team_id):
             state.selected_team_id = team_id
 
+            logger.info(f"Switching team to {team_id}")
             # Load matches for this team
             await load_matches(team_id)
 
-            # Load players for this team
-            players = await load_team_players(team_id)
-            state.players = players
+            # Reset selected player & match
+            state.selected_match_id = None
+            state.selected_player_id = None
+            state.active_player_ids.clear()
+            state.players = [] # Clear players            
 
             players_column.clear()
 
-            with players_column:
-                ui.markdown("### Players for team").classes("mt-4")
 
-                for p in players:
-                    player_id = p["id"]
-                    player_name = f"{p.get('first_name', 'Unknown')} {p.get('last_name', '')}"
-                    active = player_id in state.active_player_ids
-                    selected = (state.selected_player_id == player_id)
+        async def on_match_change(match_id):
+            state.selected_match_id = match_id
+            players_column.clear()
 
-                    # Determine initial button color
-                    def button_class(active, selected):
-                        if selected:
-                            return "bg-red-500 text-white"
-                        if active:
-                            return "bg-green-500 text-white"
-                        return "bg-gray-300 text-gray-600"
+            logger.info(f"Switching match to {match_id}")
+            if match_id is None:
+                return
+            
+            # Load players
+            state.players = await load_team_players(state.selected_team_id)
+            state.active_player_ids = set()  # Reset active players
 
+            render_players(state.players)
+
+
+        # simple handler for clicking a player button (when enabled)
+        def on_player_button_click(player_id):
+            # If inactive → ignore click
+            if player_id not in state.active_player_ids:
+                return
+
+            state.selected_player_id = player_id
+
+            # Notify
+            logger.info(f"Selected player {player_id}")
+
+            # Re-render buttons (lightweight refresh)
+            render_players(state.players)
+
+
+        def render_players(players):
+            players_column.clear()
+
+            for p in players:
+                player_id = p["id"]
+                player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
+                is_active = player_id in state.active_player_ids
+                is_selected = (state.selected_player_id == player_id)
+
+                # Create button
+                with players_column:
                     with ui.row().classes("items-center gap-4"):
-
-                        # Create button
-                        btn = ui.button(
-                            f"{player_name}",
-                            on_click=lambda _, pid=player_id: on_player_button_click(pid),
-                        ).classes(button_class(active, selected))
-
-                        if not active:
-                            btn.disable()
+                        # Create the ToggleButton
+                        btn = ToggleButton(
+                            player_id=player_id,
+                            player_name=player_name,
+                            active=is_active,
+                            selected=is_selected,
+                            on_click=on_player_button_click,
+                        )
 
                         # Switch handler
                         async def switch_handler(e, pid=player_id, button=btn):
                             is_active = bool(e.value)
+                            button._active = is_active               # ← FIX
+                            button.update()                          # ← Important!
 
                             if is_active:
                                 state.active_player_ids.add(pid)
@@ -136,65 +197,8 @@ def live_page():
                                 state.active_player_ids.discard(pid)
                                 button.disable()
 
-                            # Update button color
-                            button.classes(remove="bg-green-500 bg-gray-300 bg-gray-600 bg-red-500 text-white text-gray-600")
-                            button.classes(add=button_class(is_active, state.selected_player_id == pid))
-
-                        ui.switch(value=active, on_change=switch_handler)
-
-        # simple handler for clicking a player button (when enabled)
-        def on_player_button_click(player_id):
-            # If inactive → ignore click
-            if player_id not in state.active_player_ids:
-                return
-
-            previous = state.selected_player_id
-            state.selected_player_id = player_id
-
-            # Notify
-            ui.notify(f"Selected player {player_id}")
-
-            # Re-render buttons (lightweight refresh)
-            players_column.clear()
-
-            with players_column:
-                ui.markdown("### Players for team").classes("mt-4")
-
-                for p in state.players:
-                    pid = p["id"]
-                    active = pid in state.active_player_ids
-                    selected = (state.selected_player_id == pid)
-
-                    def button_class(active, selected):
-                        if selected:
-                            return "bg-red-500 text-white"
-                        if active:
-                            return "bg-green-500 text-white"
-                        return "bg-gray-300 text-gray-600"
-
-                    with ui.row().classes("items-center gap-4"):
-                        btn = ui.button(
-                            f"{p.get('first_name','Unknown')} {p.get('last_name','')}",
-                            on_click=lambda _, pid=pid: on_player_button_click(pid),
-                        ).classes(button_class(active, selected))
-
-                        if not active:
-                            btn.disable()
-
-                        ui.switch(
-                            value=active,
-                            on_change=lambda e, pid=pid, button=btn: None,  # keep your switch logic if needed
-                        )
-
-
-
-        async def on_match_change(match_id):
-            state.selected_match = {"id": match_id}
-
-            # Load players
-            players = await load_team_players(state.selected_team_id)
-            state.players = players
-
+                        ui.switch(value=is_active, on_change=switch_handler)
+            
 
         # ---------------------------------------------------------------
         # UI LAYOUT
@@ -208,17 +212,20 @@ def live_page():
                 label="Select team",
                 with_input=False,
                 on_change=lambda e: on_team_change(e.value),
-            )
+            ).classes("w-32")  # Make the select wider
 
             match_select = ui.select(
                 {},
                 label="Select match",
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
-            )
+            ).classes("w-48")  # Make the select wider
 
         with ui.row().classes("mt-6 gap-8"):
+            ui.markdown("### Players for team").classes("mt-4")
             # container where team players will appear
+        
+        with ui.row():
             players_column = ui.column()
 
         # ---------------------------------------------------------------
