@@ -236,6 +236,7 @@ def live_page():
             # update gui
             render_actions()
             render_players(state.players)
+            ii.content = ""  # Clear the playfield indicator
 
 
         async def on_team_change(team_id):

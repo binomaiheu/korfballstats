@@ -72,5 +72,5 @@ def index():
 #     events_page()
 
 
-ui.run_with(app=app, mount_path='/', title="Korfball Stats")
+ui.run_with(app=app, mount_path='/', title="Ganda Korfball Statistics")
 
