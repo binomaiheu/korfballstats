@@ -12,7 +12,7 @@ logger = logging.getLogger('uvicorn.error')
 
 
 
-class ToggleButton(ui.button):
+class PlayerButton(ui.button):
     def __init__(self, player_id, player_name, active, selected, on_click, *args, **kwargs):
         self.player_id = player_id
         self._active = active # player is on the field
@@ -46,6 +46,30 @@ class ToggleButton(ui.button):
         super().update()
 
 
+
+class ActionButton(ui.button):
+    def __init__(self, action: ActionType, selected: bool, on_click, *args, **kwargs):
+        self._action = action
+        self._selected = selected
+        self._on_click = on_click
+        super().__init__(action.name.replace("_", " ").title())
+        self.on('click', self.toggle)
+
+        self.update()
+
+    def toggle(self):
+        self._selected = not self._selected
+        self._on_click(self._action)
+
+    def update(self):
+        with self.props.suspend_updates():
+            if self._selected:
+                self.props(f'color="red"')
+            else:
+                self.props(f'color="green"')  
+        super().update()
+
+
 class LiveState:
     """
     Represents the state of the live match.
@@ -70,6 +94,8 @@ class LiveState:
         self.timer = None
 
         self.player_seconds: dict[int, int] = {}
+
+        self.current_action = None
 
     @property
     def formatted_time(self):
@@ -206,8 +232,25 @@ def live_page():
             state.players = await load_team_players(state.selected_team_id)
             state.active_player_ids = set()  # Reset active players
 
+            render_actions()
             render_players(state.players)
+
             clock_area.refresh()
+
+
+        def on_action_button_click(action_type):
+            if state.current_action == action_type:
+                # Deselect
+                state.current_action = None
+                logger.info(f"Deselected action {action_type}")
+            else:
+                # Select new action
+                state.current_action = action_type
+                logger.info(f"Selected action {action_type}")
+
+            # Re-render actions (lightweight refresh)
+            render_actions()
+
 
 
         # simple handler for clicking a player button (when enabled)
@@ -243,6 +286,18 @@ def live_page():
             button.update() 
 
 
+        def render_actions():
+            action_column.clear()
+
+            with action_column:
+                for action_type in ActionType:
+                    act_btn = ActionButton(
+                        action_type, 
+                        action_type == state.current_action,
+                        on_click=on_action_button_click
+                    )
+
+
         def render_players(players):
             players_column.clear()
  
@@ -254,13 +309,11 @@ def live_page():
                         is_active = player_id in state.active_player_ids
                         is_selected = (state.selected_player_id == player_id)
 
-
                         # Create button
-                        #with ui.row().classes("items-center gap-4"):
                         with ui.grid().classes("grid-cols-[auto_3rem_4rem] items-center gap-2"):
 
                             # Create the ToggleButton
-                            btn = ToggleButton(
+                            btn = PlayerButton(
                                 player_id=player_id,
                                 player_name=player_name,
                                 active=is_active,
@@ -341,12 +394,7 @@ def live_page():
         with ui.row():
             with ui.card():
                 ui.label("Actions").classes("text-xs font-bold text-grey-6")
-                #action_column = ui.column()
-                for action_type in ActionType:
-                    ui.button(
-                        action_type.name.replace("_", " ").title(),
-                        on_click=lambda at=action_type: logger.info(f"Action selected: {at.name}")
-                    )
+                action_column = ui.column()
             with ui.card():
                 ui.label("Players").classes("text-xs font-bold text-grey-6")
                 players_column = ui.column()
@@ -354,7 +402,7 @@ def live_page():
                 ui.label("Result").classes("text-xs font-bold text-grey-6")
                 with ui.row():
                     ui.button(
-                        "Ok",
+                        "Ok / Score",
                         on_click=lambda: logger.info(f"Result selected: OK"),
                         icon="thumb_up"
                     )

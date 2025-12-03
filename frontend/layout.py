@@ -10,7 +10,7 @@ def apply_layout(content):
 
     with ui.header().classes(replace='row items-center').style('height: 50px;'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-        ui.label("Ganda Korfball Stats").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
+        ui.label("Ganda Korfball Statistics").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
 
     with left_drawer:
         with ui.row().classes('justify-end'):
