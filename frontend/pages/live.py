@@ -1,6 +1,8 @@
 import logging
 
 from nicegui import ui
+
+from backend.schema import ActionType
 from frontend.api import api_get, api_post
 from frontend.layout import apply_layout
 
@@ -244,32 +246,34 @@ def live_page():
         def render_players(players):
             players_column.clear()
  
-            for p in players:
-                player_id = p["id"]
-                player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
-                is_active = player_id in state.active_player_ids
-                is_selected = (state.selected_player_id == player_id)
+            with players_column:
+                with ui.grid(columns=2).classes("gap-4"):
+                    for p in players:
+                        player_id = p["id"]
+                        player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
+                        is_active = player_id in state.active_player_ids
+                        is_selected = (state.selected_player_id == player_id)
 
 
-                # Create button
-                with players_column:
-                    with ui.row().classes("items-center gap-4"):
+                        # Create button
+                        #with ui.row().classes("items-center gap-4"):
+                        with ui.grid().classes("grid-cols-[auto_3rem_4rem] items-center gap-2"):
 
-                        # Create the ToggleButton
-                        btn = ToggleButton(
-                            player_id=player_id,
-                            player_name=player_name,
-                            active=is_active,
-                            selected=is_selected,
-                            on_click=on_player_button_click,
-                        ).classes("w-32 items-start")
-                        
-                        # Use lambda with default arguments to freeze the values of player_id and btn
-                        ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
+                            # Create the ToggleButton
+                            btn = ToggleButton(
+                                player_id=player_id,
+                                player_name=player_name,
+                                active=is_active,
+                                selected=is_selected,
+                                on_click=on_player_button_click,
+                            )#.classes("w-32 items-start")
+                            
+                            # Use lambda with default arguments to freeze the values of player_id and btn
+                            ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
 
-                        # playtime
-                        ui.label().bind_text_from(state.player_seconds, player_id, lambda secs: f"{secs // 60:02d}:{secs % 60:02d}").classes("text-xs text-grey-6")
- 
+                            # playtime
+                            ui.label().bind_text_from(state.player_seconds, player_id, lambda secs: f"{secs // 60:02d}:{secs % 60:02d}").classes("text-xs text-grey-6")
+
         # ---------------------------------------------------------
         # UI COMPONENTS (REFRESHABLE)
         # ---------------------------------------------------------
@@ -336,11 +340,31 @@ def live_page():
 
         with ui.row():
             with ui.card():
+                ui.label("Actions").classes("text-xs font-bold text-grey-6")
+                #action_column = ui.column()
+                for action_type in ActionType:
+                    ui.button(
+                        action_type.name.replace("_", " ").title(),
+                        on_click=lambda at=action_type: logger.info(f"Action selected: {at.name}")
+                    )
+            with ui.card():
                 ui.label("Players").classes("text-xs font-bold text-grey-6")
                 players_column = ui.column()
             with ui.card():
-                ui.label("Actions").classes("text-xs font-bold text-grey-6")
-                action_column = ui.column()
+                ui.label("Result").classes("text-xs font-bold text-grey-6")
+                with ui.row():
+                    ui.button(
+                        "Ok",
+                        on_click=lambda: logger.info(f"Result selected: GOAL"),
+                        icon="thumb_up"
+                    )
+                    ui.button(
+                        "Gemist",
+                        on_click=lambda: logger.info(f"Result selected: GOAL"),
+                        icon="thumb_down"
+                    )
+
+
 
         # ---------------------------------------------------------------
         # INITIAL LOAD
