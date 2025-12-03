@@ -355,12 +355,13 @@ def live_page():
                 with ui.row():
                     ui.button(
                         "Ok",
-                        on_click=lambda: logger.info(f"Result selected: GOAL"),
+                        on_click=lambda: logger.info(f"Result selected: OK"),
                         icon="thumb_up"
                     )
+                with ui.row():
                     ui.button(
                         "Gemist",
-                        on_click=lambda: logger.info(f"Result selected: GOAL"),
+                        on_click=lambda: logger.info(f"Result selected: MISSED"),
                         icon="thumb_down"
                     )
 

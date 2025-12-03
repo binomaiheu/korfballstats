@@ -2,11 +2,17 @@ from nicegui import ui
 
 def apply_layout(content):
     """Wrap a page in the shared layout."""
+
+    left_drawer = ui.left_drawer()\
+        .props('behavior=mobile persistent bordered')\
+        .classes('bg-blue-100')
+
+
     with ui.header().classes(replace='row items-center').style('height: 50px;'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-        ui.label("KorfballStats").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
+        ui.label("Ganda Korfball Stats").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
 
-    with ui.left_drawer().classes('bg-blue-100') as left_drawer:
+    with left_drawer:
         with ui.row().classes('justify-end'):
             ui.button(icon='close', on_click=left_drawer.toggle).props('flat round dense')
     
