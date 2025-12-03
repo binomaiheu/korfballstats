@@ -97,6 +97,8 @@ class LiveState:
         self.player_seconds: dict[int, int] = {}
 
         self.current_action = None
+        self.x: float = None
+        self.y: float = None
 
     @property
     def formatted_time(self):
@@ -203,6 +205,38 @@ def live_page():
         # ---------------------------------------------------------------
         # UI UPDATE HANDLERS
         # ---------------------------------------------------------------
+        async def submit(result: bool):
+            if not state.selected_match_id or not state.selected_player_id or not state.current_action:
+                logger.warning("Cannot submit action: missing selection")
+                return
+
+            action_data = {
+                "match_id": state.selected_match_id,
+                "player_id": state.selected_player_id,
+                "timestamp": state.clock_seconds,
+                "x": state.x,
+                "y": state.y,
+                "period": state.period,
+                "action": state.current_action,
+                "result": result
+            }
+
+            try:
+                await api_post("/actions", action_data)
+                logger.info(f"Submitted action: {action_data}")
+            except Exception as e:
+                logger.error(f"Failed to submit action: {e}")
+
+            # Optionally, you could reset the state or provide feedback to the user here
+            state.current_action = None
+            state.selected_player_id = None
+            state.x = None
+            state.y = None
+
+            # update gui
+            render_actions()
+            render_players(state.players)
+
 
         async def on_team_change(team_id):
             state.selected_team_id = team_id
@@ -364,9 +398,12 @@ def live_page():
         def mouse_handler(e: events.MouseEventArguments):
             color = 'Red' 
 #            ii.content += f'<circle cx="{e.image_x}" cy="{e.image_y}" r="5" fill="none" stroke="{color}" stroke-width="2" />'
-            ii.content = f'<circle cx="{e.image_x}" cy="{e.image_y}" r="5" fill="none" stroke="{color}" stroke-width="2" />'
-            print(f'{e.type} at ({e.image_x:.1f}, {e.image_y:.1f})')
-      
+            ii.content = f'<circle cx="{e.image_x}" cy="{e.image_y}" r="8" fill="none" stroke="{color}" stroke-width="5" />'
+            state.x = e.image_x/1135.9751*40
+            state.y = e.image_y/568.49438*20
+
+            print(f'{e.type} at ({state.x:.1f}, {state.y:.1f})')
+
 
         # ---------------------------------------------------------------
         # UI LAYOUT
@@ -401,6 +438,7 @@ def live_page():
             src = 'korfball_field.svg'
             #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
             with ui.card():
+                ui.label("Playfield").classes("text-xs font-bold text-grey-6")
                 ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 480px; height: auto')
 
         with ui.row():
@@ -415,13 +453,13 @@ def live_page():
                 with ui.row():
                     ui.button(
                         "Ok / Score",
-                        on_click=lambda: logger.info(f"Result selected: OK"),
+                        on_click=lambda x: submit(True),
                         icon="thumb_up"
                     )
                 with ui.row():
                     ui.button(
                         "Gemist",
-                        on_click=lambda: logger.info(f"Result selected: MISSED"),
+                        on_click=lambda x: submit(False),
                         icon="thumb_down"
                     )
 

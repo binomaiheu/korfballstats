@@ -80,6 +80,8 @@ class Action(BaseModel):
     player_id: int
 
     timestamp: int
+    x: Optional[float] = None
+    y: Optional[float] = None
     period: int
     action: ActionType
     result: Optional[bool] = False

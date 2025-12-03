@@ -69,6 +69,8 @@ class Action(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
 
     timestamp: Mapped[int] = mapped_column()
+    x: Mapped[float] = mapped_column()
+    y: Mapped[float] = mapped_column()
     period: Mapped[int] = mapped_column()
     action: Mapped[ActionType] = mapped_column(Enum(ActionType))
     result: Mapped[bool] = mapped_column(Boolean, default=False)
