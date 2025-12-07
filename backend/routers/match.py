@@ -9,7 +9,8 @@ from typing import Union, List
 
 from backend.db import get_session
 from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
-from backend.models import Match
+from backend.schema import ActionRead
+from backend.models import Match, Action, Team
 
 from logging import getLogger
 
@@ -28,6 +29,28 @@ async def read_matches(with_team: bool = False, session: AsyncSession = Depends(
     matches = result.scalars().all()
 
     return [MatchRead.model_validate(match) for match in matches]
+
+
+@router.get("/{match_id}", response_model=MatchRead)
+async def get_match(
+    match_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    stmt = (
+        select(Match)
+        .options(
+            selectinload(Match.team)
+        )
+        .where(Match.id == match_id)
+    )
+
+    result = await session.execute(stmt)
+    match = result.scalar_one_or_none()
+
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    return match
 
 
 @router.post("", response_model=MatchRead)
@@ -94,3 +117,25 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
             status_code=400,
             detail="Error deleting match from database"
         )
+
+
+@router.get("/{match_id}/actions", response_model=list[ActionRead])
+async def get_match_actions(
+    match_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    # Ensure match exists
+    match = await session.get(Match, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    # Fetch all actions for this match
+    stmt = (
+        select(Action)
+        .where(Action.match_id == match_id)
+    )
+
+    result = await session.execute(stmt)
+    actions = result.scalars().all()
+
+    return actions

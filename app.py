@@ -13,6 +13,7 @@ from backend.routers.action import router as events_router
 from frontend.pages.teams import teams_page
 from frontend.pages.matches import matches_page
 from frontend.pages.live import live_page
+from frontend.pages.analysis import analysis_page
 
 
 @asynccontextmanager
@@ -47,30 +48,6 @@ app.include_router(events_router, prefix="/api/v1")
 def index():
     ui.navigate.to('/teams')
 
-
-
-# @ui.page("/")
-# def index():
-#     ui.label("Korfball Statistics").classes("text-3xl font-bold")
-#     ui.link("Teams", "/teams")
-#     ui.link("Matches", "/matches")
-#     ui.link("Events", "/events")
-
-
-# @ui.page("/teams")
-# def teams_ui():
-#     teams_page()
-
-
-# @ui.page("/matches")
-# def matches_ui():
-#     matches_page()
-
-
-# @ui.page("/events")
-# def events_ui():
-#     events_page()
-
-
+# Mount the NiceGUI app onto the FastAPI app
 ui.run_with(app=app, mount_path='/', title="Ganda Korfball Statistics")
 

@@ -399,9 +399,11 @@ def live_page():
         def mouse_handler(e: events.MouseEventArguments):
             color = 'Red' 
 #            ii.content += f'<circle cx="{e.image_x}" cy="{e.image_y}" r="5" fill="none" stroke="{color}" stroke-width="2" />'
-            ii.content = f'<circle cx="{e.image_x}" cy="{e.image_y}" r="8" fill="none" stroke="{color}" stroke-width="5" />'
-            state.x = e.image_x/1135.9751*40
-            state.y = e.image_y/568.49438*20
+            ii.content = f'<circle cx="{e.image_x}" cy="{e.image_y}" r="4" fill="none" stroke="{color}" stroke-width="3" />'
+            #state.x = (e.image_x-50)/700*40
+            #state.y = (e.image_y-50)/300*20
+            state.x = e.image_x
+            state.y = e.image_y
 
             print(f'{e.type} at ({state.x:.1f}, {state.y:.1f})')
 
@@ -437,10 +439,11 @@ def live_page():
 
         with ui.row():
             src = 'korfball_field.svg'
+            #src = 'korfball.svg'
             #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
             with ui.card():
                 ui.label("Playfield").classes("text-xs font-bold text-grey-6")
-                ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 480px; height: auto')
+                ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
 
         with ui.row():
             with ui.card():
