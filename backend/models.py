@@ -21,6 +21,17 @@ team_player_link = Table(
 )
 
 
+
+class MatchPlayerLink(Base):
+    __tablename__ = "match_player_link"
+
+    match_id: Mapped[int] = mapped_column(ForeignKey("match.id"), primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("player.id"), primary_key=True)
+
+    time_played: Mapped[int] = mapped_column(Integer, default=0)  # time played in this match in seconds
+
+
+
 class Team(Base):
     __tablename__ = "team"
 
