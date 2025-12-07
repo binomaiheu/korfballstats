@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime
 
 
-from .schema import ActionType
+from .schema import ActionType, SexType
 from .db import engine
 
 
@@ -38,6 +38,7 @@ class Player(Base):
     number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     first_name: Mapped[str] = mapped_column(String, nullable=False)
     last_name: Mapped[str] = mapped_column(String, nullable=False)
+    sex: Mapped[Optional[SexType]] = mapped_column(Enum(SexType), nullable=False)
 
     teams: Mapped[List[Team]] = relationship("Team", secondary=team_player_link, back_populates="players")
 

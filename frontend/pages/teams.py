@@ -5,6 +5,8 @@ from nicegui import ui
 from frontend.layout import apply_layout
 from frontend.api import api_get, api_post, api_delete, api_put
 
+from backend.schema import SexType
+
 logger = logging.getLogger('uvicorn.error')
 
 
@@ -81,15 +83,16 @@ def teams_page():
                     first_name = ui.input('First Name').classes('w-70')
                     last_name = ui.input('Last Name').classes('w-70')
                     number = ui.input('Number').classes('w-70')
+                    sex = ui.select(label='Sex', options={'male': 'Male', 'female': 'Female'}).classes('w-70')
                 with ui.row():
-                    ui.button('Save', on_click=lambda: save_player(first_name.value, last_name.value, number.value, dialog))
+                    ui.button('Save', on_click=lambda: save_player(first_name.value, last_name.value, number.value, sex.value, dialog))
                     ui.button('Cancel', on_click=dialog.close)
             dialog.open()
 
-        async def save_player(first_name, last_name, number, dialog):
+        async def save_player(first_name, last_name, number, sex, dialog):
             try:
-                if first_name.strip() and last_name.strip() and number.strip():
-                    await api_post("/players", {"first_name": first_name, "last_name": last_name, "number": number})
+                if first_name.strip() and last_name.strip() and number.strip() and sex.strip():
+                    await api_post("/players", {"first_name": first_name, "last_name": last_name, "number": number, "sex": sex})
                     dialog.close()
                     await refresh_all()
             except httpx.HTTPStatusError as e:
@@ -110,15 +113,16 @@ def teams_page():
                     first_name = ui.input('First Name', value=player['first_name']).classes('w-70')
                     last_name = ui.input('Last Name', value=player['last_name']).classes('w-70')
                     number = ui.input('Number', value=str(player['number'])).classes('w-70')
+                    sex = ui.select(label='Sex', options={'male': 'Male', 'female': 'Female'}, value=player['sex']).classes('w-70')
                 with ui.row():
-                    ui.button('Save', on_click=lambda: save_edited_player(player['id'], first_name.value, last_name.value, number.value, dialog))
+                    ui.button('Save', on_click=lambda: save_edited_player(player['id'], first_name.value, last_name.value, number.value, sex.value, dialog))
                     ui.button('Cancel', on_click=dialog.close)
             dialog.open()
 
-        async def save_edited_player(player_id, first_name, last_name, number, dialog):
+        async def save_edited_player(player_id, first_name, last_name, number, sex, dialog):
             try:
                 if first_name.strip() and last_name.strip() and number.strip():
-                    await api_put(f"/players/{player_id}", {"first_name": first_name, "last_name": last_name, "number": number})
+                    await api_put(f"/players/{player_id}", {"first_name": first_name, "last_name": last_name, "number": number, "sex": sex})
                     dialog.close()
                     await refresh_all()
             except httpx.HTTPStatusError as e:
@@ -265,7 +269,8 @@ def teams_page():
                     columns = [
                         {'name': 'first_name', 'label': 'First Name', 'field': 'first_name'},
                         {'name': 'last_name', 'label': 'Last Name', 'field': 'last_name'},
-                        {'name': 'number', 'label': 'Number', 'field': 'number'}
+                        {'name': 'number', 'label': 'Number', 'field': 'number'},
+                        {'name': 'sex', 'label': 'Sex', 'field': 'sex'},
                     ]
                     # LEFT TABLE — Unassigned
                     left_table = ui.table(
@@ -273,7 +278,7 @@ def teams_page():
                         rows=[],
                         selection='multiple',
                         title='Available'
-                    ).classes('flex-1 min-w-0')
+                    ).classes('flex-1 min-w-0 q-table--dense')
 
                     # RIGHT TABLE — Assigned to selected team
                     right_table = ui.table(
@@ -281,7 +286,7 @@ def teams_page():
                         rows=[],
                         selection='multiple',
                         title="Players"
-                    ).classes('flex-1 min-w-0')
+                    ).classes('flex-1 min-w-0 q-table--dense')
 
 
 
@@ -297,7 +302,8 @@ def teams_page():
                         {"name": "id", "label": "Id", "field": "id", "align": 'left'},
                         {"name": "first_name", "label": "First name", "field": "first_name", "sortable": True, "align": 'left'},
                         {"name": "last_name", "label": "Last name", "field": "last_name", "sortable": True, "align": 'left'},
-                        {"name": "number", "label": "Number", "field": "number", "sortable": True, "align": 'right'}
+                        {"name": "number", "label": "Number", "field": "number", "sortable": True, "align": 'right'},
+                        {"name": "sex", "label": "Sex", "field": "sex", "sortable": True, "align": 'left'}
                     ],
                     rows=[],
                     row_key="id",
@@ -306,7 +312,7 @@ def teams_page():
                         'headerClasses': 'text-primary'
                     },
                     pagination={'rowsPerPage': 10}
-                ).classes("w-full mt-2")
+                ).classes("w-full mt-2 q-table--dense")
                 player_table.add_slot('body-cell', '''
                 <q-td :props="props">
                     <template v-if="props.col.name === 'actions'">
@@ -342,7 +348,7 @@ def teams_page():
                         'headerClasses': 'text-primary'
                     },
                     pagination={'rowsPerPage': 10}
-                ).classes("w-full mt-2")
+                ).classes("w-full mt-2 q-table--dense")
                 team_table.add_slot('body-cell', '''
                 <q-td :props="props">
                     <template v-if="props.col.name === 'actions'">

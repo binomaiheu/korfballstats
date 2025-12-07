@@ -5,21 +5,25 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 class ActionType(str, Enum):
-    SHOT = "shot"
-    KORTE_KANS = "korte_kans"
-    VRIJWORP = "vrijworp"
-    STRAFWORP = "strafworp"
-    INLOPER = "inloper"
+    SHOT = "sht"
+    KORTE_KANS = "kk"
+    VRIJWORP = "vw"
+    STRAFWORP = "sw"
+    INLOPER = "inl"
     REBOUND = "rebound"
     ASSIST = "assist"
     STEAL = "steal"
 
+class SexType(str, Enum):
+    MALE = "m"
+    FEMALE = "f"
 
 # -- Player models
 class PlayerCreate(BaseModel):
     number: int
     first_name: str
     last_name: str
+    sex: SexType
 
 
 class PlayerRead(PlayerCreate):

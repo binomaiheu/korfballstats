@@ -174,7 +174,7 @@ def matches_page():
                         'headerClasses': 'text-primary'
                     },
                     pagination={'rowsPerPage': 10}
-                ).classes("w-full mt-4")
+                ).classes("w-full mt-4 q-table--dense")
                 matches_table.add_slot('body-cell', '''
                     <q-td :props="props">
                         <template v-if="props.col.name === 'actions'">
