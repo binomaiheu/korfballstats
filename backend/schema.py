@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 class ActionType(str, Enum):
-    SHOT = "sht"
+    SHOT = "shot"
     KORTE_KANS = "kk"
     VRIJWORP = "vw"
     STRAFWORP = "sw"
@@ -15,8 +15,13 @@ class ActionType(str, Enum):
     STEAL = "steal"
 
 class SexType(str, Enum):
-    MALE = "m"
-    FEMALE = "f"
+    MALE = "male"
+    FEMALE = "female"
+
+class MatchType(str, Enum):
+    NORMAL = "normal"
+    ONEZONE = "onezone"
+    BEACH = "beach"
 
 # -- Player models
 class PlayerCreate(BaseModel):
@@ -65,6 +70,8 @@ class MatchCreate(BaseModel):
     date: Optional[datetime] = None
     opponent_name: str
     location: Optional[str] = None
+    match_type: Optional[MatchType] = MatchType.NORMAL
+    # match time and finalized should not be set at creation
 
 
 class MatchRead(BaseModel):
@@ -73,6 +80,9 @@ class MatchRead(BaseModel):
     opponent_name: str
     date: datetime
     location: Optional[str] = None
+    match_type: Optional[MatchType] = MatchType.NORMAL
+    time_registered_s: int
+    is_finalized: bool
 
     model_config = {
         "from_attributes": True

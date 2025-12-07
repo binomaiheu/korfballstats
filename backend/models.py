@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime
 
 
-from .schema import ActionType, SexType
+from .schema import ActionType, MatchType, SexType
 from .db import engine
 
 
@@ -55,7 +55,9 @@ class Match(Base):
     team_id: Mapped[int] = mapped_column(ForeignKey("team.id"))
     opponent_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    # binnen/buiten
+    match_type: Mapped[Optional[MatchType]] = mapped_column(Enum(MatchType), default=MatchType.NORMAL)
+    time_registered_s: Mapped[int] = mapped_column(Integer, default=0)  # in seconds
+    is_finalized: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
     team: Mapped["Team"] = relationship("Team", back_populates="matches")
