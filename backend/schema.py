@@ -109,3 +109,22 @@ class ActionRead(Action):
     model_config = {
         "from_attributes": True
     }
+
+class PlayerPlaytime(BaseModel):
+    player_id: int
+    player: PlayerRead
+    time_played: int  # in seconds
+
+    model_config = {
+        "from_attributes": True
+    }
+
+class PlaytimeForMatch(BaseModel):
+    match_id: int
+    match: MatchRead
+    match_time_registered_s: int
+    player_playtimes: List[PlayerPlaytime] = Field(default_factory=list)
+
+class TimeUpdate(BaseModel):
+    match_time_registered_s: int
+    player_time_registered_s: dict[int, int]  # player_id -> time_played

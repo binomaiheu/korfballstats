@@ -8,6 +8,7 @@ from backend.routers.team import router as teams_router
 from backend.routers.player import router as players_router
 from backend.routers.match import router as matches_router
 from backend.routers.action import router as events_router
+from backend.routers.playtime import router as playtime_router
 
 # Import pages
 from frontend.pages.teams import teams_page
@@ -40,6 +41,7 @@ app.include_router(teams_router, prefix="/api/v1")
 app.include_router(players_router, prefix="/api/v1")
 app.include_router(matches_router, prefix="/api/v1")
 app.include_router(events_router, prefix="/api/v1")
+app.include_router(playtime_router, prefix="/api/v1")
 
 # ------------------------------------------------------------
 # Register NiceGUI pages

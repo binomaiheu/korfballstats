@@ -79,6 +79,12 @@ async def update_match(match_id: int, data: MatchCreate, session: AsyncSession =
     match = await session.get(Match, match_id)
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
+    
+    if match.is_finalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update a finalized match"
+        )
 
     for key, value in data.model_dump().items():
         setattr(match, key, value)
@@ -139,3 +145,60 @@ async def get_match_actions(
     actions = result.scalars().all()
 
     return actions
+
+@router.post("/{match_id}/finalize", response_model=MatchRead)
+async def finalize_match(
+    match_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    match = await session.get(Match, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    match.is_finalized = True
+
+    try:
+        session.add(match)
+
+        await session.commit()
+        await session.refresh(match, attribute_names=["team"])
+
+    except IntegrityError:
+        await session.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Error finalizing match in database"
+        )
+
+    return match
+
+@router.post("/{match_id}/time_registered", response_model=MatchRead)
+async def register_time(match_id: int, t_reg: int, session: AsyncSession = Depends(get_session)):
+    match = await session.get(Match, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    if match.is_finalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update time for a finalized match"
+        )
+
+    match.time_registered_s = t_reg
+
+    try:
+        session.add(match)
+
+        await session.commit()
+        await session.refresh(match, attribute_names=["team"])
+
+    except IntegrityError:
+        await session.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Error registering time in database"
+        )
+
+    return match

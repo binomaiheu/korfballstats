@@ -9,7 +9,7 @@ from typing import Union, List
 
 from backend.db import get_session
 from backend.schema import ActionRead, ActionCreate
-from backend.models import Action
+from backend.models import Action, Match
 
 
 router = APIRouter(prefix="/actions", tags=["Actions"])
@@ -17,6 +17,16 @@ router = APIRouter(prefix="/actions", tags=["Actions"])
 
 @router.post("", response_model=ActionRead)
 async def add_action(action: ActionCreate, session: AsyncSession = Depends(get_session)):
+    # Check if match exists and is not finalized
+    match = await session.get(Match, action.match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    if match.is_finalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot add actions to a finalized match"
+        )
 
     action = Action(**action.model_dump())
 
@@ -52,6 +62,14 @@ async def edit_action(action_id: int, action_update: ActionCreate, session: Asyn
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
     
+    # Check if match is finalized
+    match = await session.get(Match, action.match_id)
+    if match and match.is_finalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot edit actions in a finalized match"
+        )
+    
     for key, value in action_update.model_dump().items():
         if hasattr(action, key):
             setattr(action, key, value)
@@ -75,6 +93,14 @@ async def remove_action(action_id: int, session: AsyncSession = Depends(get_sess
     action = await session.get(Action, action_id)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
+    
+    # Check if match is finalized
+    match = await session.get(Match, action.match_id)
+    if match and match.is_finalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete actions from a finalized match"
+        )
 
     try:
         await session.delete(action)
