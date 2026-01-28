@@ -1,7 +1,7 @@
 from asyncio import events
 import logging
 
-from nicegui import ui, events
+from nicegui import app, ui, events
 
 from backend.schema import ActionType
 from frontend.api import api_get, api_post, api_put
@@ -84,6 +84,7 @@ class LiveState:
         self.selected_match_id: Optional[int] = None
         self.selected_match_data: Optional[Dict] = None  # Full match data including is_finalized
         self.selected_player_id: Optional[int] = None
+        self.locked_match_id: Optional[int] = None
 
         # Game Data
         self.actions: List = []
@@ -104,6 +105,7 @@ class LiveState:
         
         # Auto-save timer
         self.playtime_save_timer = None
+        self.clock_display = None
 
     @property
     def formatted_time(self):
@@ -122,13 +124,18 @@ class LiveState:
     def is_match_finalized(self):
         return self.selected_match_data and self.selected_match_data.get("is_finalized", False)
 
-state = LiveState()
+def get_state() -> LiveState:
+    client = ui.context.client
+    if not hasattr(client, "live_state"):
+        client.live_state = LiveState()
+    return client.live_state
 
 
 @ui.page('/live')
 def live_page():
 
     def content():
+        state = get_state()
 
         # ---------------------------------------------------------------
         # HELPERS
@@ -222,6 +229,26 @@ def live_page():
                 
             except Exception as e:
                 logger.error(f"Failed to save playtime data: {e}")
+
+        async def lock_match(match_id: int) -> bool:
+            try:
+                await api_post(f"/matches/{match_id}/lock", {})
+                state.locked_match_id = match_id
+                app.storage.user["locked_match_id"] = match_id
+                return True
+            except Exception as e:
+                detail = str(e)
+                if e.args and isinstance(e.args[0], dict):
+                    detail = e.args[0].get("detail", detail)
+                ui.notify(f"Match is locked: {detail}", type="warning")
+                return False
+
+        async def unlock_match(match_id: int) -> None:
+            try:
+                await api_post(f"/matches/{match_id}/unlock", {})
+            except Exception:
+                return
+            app.storage.user.pop("locked_match_id", None)
         
         async def finalize_match():
             """Finalize the current match"""
@@ -236,6 +263,9 @@ def live_page():
                 match_data = await api_post(f"/matches/{state.selected_match_id}/finalize", {})
                 state.selected_match_data = match_data
                 logger.info(f"Match {state.selected_match_id} finalized")
+                if state.locked_match_id:
+                    await unlock_match(state.locked_match_id)
+                    state.locked_match_id = None
                 
                 # Refresh UI to show finalized state
                 clock_area.refresh()
@@ -277,8 +307,8 @@ def live_page():
             if state.clock_running:
                 state.clock_seconds += 1
                 # Update the visual clock
-                if clock_display:
-                    clock_display.text = state.formatted_time
+                if state.clock_display:
+                    state.clock_display.text = state.formatted_time
 
                 # per-player clocks
                 for pid in state.active_player_ids:
@@ -364,12 +394,19 @@ def live_page():
             state.players = [] # Clear players            
 
             players_column.clear()
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
 
 
         async def on_match_change(match_id):
             # Save playtime for previous match if exists
             if state.selected_match_id and not state.is_match_finalized:
                 await save_playtime_data()
+
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
             
             state.selected_match_id = match_id
             state.selected_match_data = None
@@ -382,6 +419,11 @@ def live_page():
                 state.player_seconds = {}
                 state.clock_seconds = 0
                 clock_area.refresh()
+                return
+
+            if not await lock_match(match_id):
+                match_select.value = None
+                state.selected_match_id = None
                 return
             
             # Load match data (including finalized status)
@@ -403,6 +445,11 @@ def live_page():
             if state.playtime_save_timer:
                 state.playtime_save_timer.deactivate()
             state.playtime_save_timer = ui.timer(30.0, lambda: save_playtime_data(), active=True)
+
+        async def handle_disconnect():
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
 
 
         def on_action_button_click(action_type):
@@ -541,8 +588,7 @@ def live_page():
                     ui.separator().props("vertical").classes("mx-4")
                     
                     # Time Display
-                    global clock_display
-                    clock_display = ui.label(state.formatted_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
+                    state.clock_display = ui.label(state.formatted_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
                     
                     ui.separator().props("vertical").classes("mx-4")
 
@@ -572,6 +618,7 @@ def live_page():
         # ---------------------------------------------------------------
         # UI LAYOUT
         # ---------------------------------------------------------------
+        ui.context.client.on_disconnect(handle_disconnect)
         ui.markdown("### 🏷️ Match Actions")
 
         with ui.row().classes("items-center gap-4"):

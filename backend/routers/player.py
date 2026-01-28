@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from typing import Union, List
 
+from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 
@@ -18,7 +19,7 @@ from logging import getLogger
 
 logger = getLogger('uvicorn.error')
 
-router = APIRouter(prefix="/players", tags=["Players"])
+router = APIRouter(prefix="/players", tags=["Players"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("", response_model=Union[List[PlayerRead], List[PlayerReadWithTeams]])

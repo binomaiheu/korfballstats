@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -7,17 +9,18 @@ from sqlalchemy.orm import selectinload
 
 from typing import Union, List
 
+from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 from backend.schema import ActionRead
-from backend.models import Match, Action, Team
+from backend.models import Match, Action, Team, User
 
 from logging import getLogger
 
 
 logger = getLogger('uvicorn.error')
 
-router = APIRouter(prefix="/matches", tags=["Matches"])
+router = APIRouter(prefix="/matches", tags=["Matches"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("", response_model=List[MatchRead])
@@ -34,7 +37,7 @@ async def read_matches(with_team: bool = False, session: AsyncSession = Depends(
 @router.get("/{match_id}", response_model=MatchRead)
 async def get_match(
     match_id: int,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ):
     stmt = (
         select(Match)
@@ -128,7 +131,7 @@ async def delete_match(match_id: int, session: AsyncSession = Depends(get_sessio
 @router.get("/{match_id}/actions", response_model=list[ActionRead])
 async def get_match_actions(
     match_id: int,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
 ):
     # Ensure match exists
     match = await session.get(Match, match_id)
@@ -149,11 +152,20 @@ async def get_match_actions(
 @router.post("/{match_id}/finalize", response_model=MatchRead)
 async def finalize_match(
     match_id: int,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     match = await session.get(Match, match_id)
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
+
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        locked_by = await session.get(User, match.locked_by_user_id)
+        locked_name = locked_by.username if locked_by else "another user"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Match is locked by {locked_name}",
+        )
 
     match.is_finalized = True
 
@@ -202,3 +214,68 @@ async def register_time(match_id: int, t_reg: int, session: AsyncSession = Depen
         )
 
     return match
+
+
+@router.post("/{match_id}/lock", status_code=200)
+async def lock_match(
+    match_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    match = await session.get(Match, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    if match.is_finalized:
+        raise HTTPException(status_code=400, detail="Cannot lock a finalized match")
+
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        locked_by = await session.get(User, match.locked_by_user_id)
+        locked_name = locked_by.username if locked_by else "another user"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Match is locked by {locked_name}",
+        )
+
+    match.locked_by_user_id = user.id
+    match.locked_at = datetime.now(timezone.utc)
+
+    try:
+        session.add(match)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail="Error locking match")
+
+    return {"detail": "ok"}
+
+
+@router.post("/{match_id}/unlock", status_code=200)
+async def unlock_match(
+    match_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    match = await session.get(Match, match_id)
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        locked_by = await session.get(User, match.locked_by_user_id)
+        locked_name = locked_by.username if locked_by else "another user"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Match is locked by {locked_name}",
+        )
+
+    match.locked_by_user_id = None
+    match.locked_at = None
+
+    try:
+        session.add(match)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail="Error unlocking match")
+
+    return {"detail": "ok"}

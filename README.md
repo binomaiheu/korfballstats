@@ -32,6 +32,54 @@ this calls the `uvicorn` ASGI internally.
 
 Now go to `http://localhost:8855` in your browser to check out the app. 
 
+## Authentication
+
+This app uses username/password authentication. Users cannot self-register; accounts are created manually via a script. All API routes are protected and the UI redirects to `/login` if you're not authenticated.
+
+Create a user:
+
+```
+python scripts/create_user.py <username>
+```
+
+You will be prompted for a password. After that, login at `http://localhost:8855/login`.
+
+### Environment variables
+
+The following environment variables are used for authentication and storage:
+
+- `KORFBALL_SECRET_KEY`: JWT signing key (required for production)
+- `KORFBALL_TOKEN_HOURS`: access token lifetime in hours (default: 12)
+- `KORFBALL_STORAGE_SECRET`: NiceGUI storage secret (required for `app.storage.user`)
+
+### Match editing locks
+
+When a user opens a match in the live view, it is locked so only that user can enter actions and update playtime. Locks are released when switching matches/teams or after finalizing.
+
+### Traceability
+
+Actions are stored with the user who submitted them, so match statistics can be traced back to the user.
+
+## Bootstrap data
+
+You can seed teams and players from `teams.yaml` (which links to a players CSV) using:
+
+```
+python scripts/bootstrap_db.py
+```
+
+If authentication is enabled, provide credentials via:
+
+```
+KORFBALL_API_USER=your_user KORFBALL_API_PASSWORD=your_password python scripts/bootstrap_db.py
+```
+
+The bootstrap script can also use:
+
+- `KORFBALL_API_URL`: API base URL (default: `http://localhost:8855/api/v1`)
+- `KORFBALL_API_USER`: API username
+- `KORFBALL_API_PASSWORD`: API password
+
 
 ## API
 

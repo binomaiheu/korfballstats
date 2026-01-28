@@ -11,12 +11,16 @@ import yaml
 
 
 DEFAULT_BASE_URL = "http://localhost:8855/api/v1"
+AUTH_TOKEN: str | None = None
 
 
 def http_json(method: str, path: str, payload: dict | None = None) -> Any:
     base_url = os.getenv("KORFBALL_API_URL", DEFAULT_BASE_URL).rstrip("/")
     url = f"{base_url}{path}"
-    response = requests.request(method, url, json=payload, timeout=10)
+    headers = {}
+    if AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
+    response = requests.request(method, url, json=payload, headers=headers, timeout=10)
     response.raise_for_status()
     if not response.content:
         return None
@@ -35,6 +39,14 @@ def safe_post(path: str, payload: dict) -> Any:
             except ValueError:
                 detail = response.text
         raise RuntimeError(f"POST {path} failed: {response.status_code if response else ''} {detail}") from exc
+
+
+def login(username: str, password: str) -> None:
+    global AUTH_TOKEN
+    data = safe_post("/auth/login", {"username": username, "password": password})
+    AUTH_TOKEN = data.get("access_token")
+    if not AUTH_TOKEN:
+        raise RuntimeError("Login failed: no access token returned")
 
 
 def fetch_list(path: str) -> list[dict]:
@@ -145,11 +157,18 @@ def main() -> None:
         default="teams.yaml",
         help="Path to teams.yaml (default: teams.yaml)",
     )
+    parser.add_argument("--username", help="API username (or set KORFBALL_API_USER)")
+    parser.add_argument("--password", help="API password (or set KORFBALL_API_PASSWORD)")
     args = parser.parse_args()
 
     teams_path = Path(args.teams).resolve()
     players_csv_path, teams = parse_teams_yaml(teams_path)
     players = load_players_csv(players_csv_path)
+
+    username = args.username or os.getenv("KORFBALL_API_USER")
+    password = args.password or os.getenv("KORFBALL_API_PASSWORD")
+    if username and password:
+        login(username, password)
 
     existing_teams = fetch_list("/teams")
     existing_players = fetch_list("/players")

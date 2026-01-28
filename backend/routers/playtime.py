@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -7,15 +7,16 @@ from sqlalchemy.orm import selectinload
 
 from typing import Union, List
 
+from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import PlaytimeForMatch, PlayerPlaytime, PlayerRead, MatchRead, TimeUpdate
-from backend.models import Match, Player, MatchPlayerLink
+from backend.models import Match, Player, MatchPlayerLink, User
 
 from logging import getLogger
 
 logger = getLogger('uvicorn.error')
 
-router = APIRouter(prefix="/playtime", tags=["Playtime"])
+router = APIRouter(prefix="/playtime", tags=["Playtime"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/{match_id}", response_model=PlaytimeForMatch)
@@ -65,7 +66,8 @@ async def get_playtime_for_match(match_id: int, session: AsyncSession = Depends(
 async def update_playtime_for_match(
     match_id: int,
     time_update: TimeUpdate,
-    session: AsyncSession = Depends(get_session)
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     # Check if match exists and is not finalized
     match = await session.get(Match, match_id)
@@ -77,6 +79,8 @@ async def update_playtime_for_match(
             status_code=400,
             detail="Cannot update playtime for a finalized match"
         )
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
     
     # Update match time
     match.time_registered_s = time_update.match_time_registered_s

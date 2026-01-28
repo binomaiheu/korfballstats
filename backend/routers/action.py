@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -7,16 +7,21 @@ from sqlalchemy.orm import selectinload
 
 from typing import Union, List
 
+from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import ActionRead, ActionCreate
-from backend.models import Action, Match
+from backend.models import Action, Match, User
 
 
-router = APIRouter(prefix="/actions", tags=["Actions"])
+router = APIRouter(prefix="/actions", tags=["Actions"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=ActionRead)
-async def add_action(action: ActionCreate, session: AsyncSession = Depends(get_session)):
+async def add_action(
+    action: ActionCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     # Check if match exists and is not finalized
     match = await session.get(Match, action.match_id)
     if not match:
@@ -28,7 +33,12 @@ async def add_action(action: ActionCreate, session: AsyncSession = Depends(get_s
             detail="Cannot add actions to a finalized match"
         )
 
-    action = Action(**action.model_dump())
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
+
+    action_payload = action.model_dump()
+    action_payload["user_id"] = user.id
+    action = Action(**action_payload)
 
     try:
         session.add(action)
@@ -57,7 +67,12 @@ async def read_action(action_id: int, session: AsyncSession = Depends(get_sessio
 
 
 @router.put("/{action_id}", response_model=ActionRead)
-async def edit_action(action_id: int, action_update: ActionCreate, session: AsyncSession = Depends(get_session)):
+async def edit_action(
+    action_id: int,
+    action_update: ActionCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     action = await session.get(Action, action_id)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
@@ -70,7 +85,12 @@ async def edit_action(action_id: int, action_update: ActionCreate, session: Asyn
             detail="Cannot edit actions in a finalized match"
         )
     
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
+
     for key, value in action_update.model_dump().items():
+        if key == "user_id":
+            continue
         if hasattr(action, key):
             setattr(action, key, value)
 
@@ -89,7 +109,11 @@ async def edit_action(action_id: int, action_update: ActionCreate, session: Asyn
 
 
 @router.delete("/{action_id}", status_code=204)
-async def remove_action(action_id: int, session: AsyncSession = Depends(get_session)):
+async def remove_action(
+    action_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
     action = await session.get(Action, action_id)
     if not action:
         raise HTTPException(status_code=404, detail="Action not found")
@@ -101,6 +125,8 @@ async def remove_action(action_id: int, session: AsyncSession = Depends(get_sess
             status_code=400,
             detail="Cannot delete actions from a finalized match"
         )
+    if match and match.locked_by_user_id and match.locked_by_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
 
     try:
         await session.delete(action)
