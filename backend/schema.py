@@ -82,7 +82,10 @@ class MatchRead(BaseModel):
     location: Optional[str] = None
     match_type: Optional[MatchType] = MatchType.NORMAL
     time_registered_s: int
+    current_period: int = 1
     is_finalized: bool
+    locked_by_user_id: Optional[int] = None
+    locked_at: Optional[datetime] = None
 
     model_config = {
         "from_attributes": True
@@ -99,6 +102,7 @@ class Action(BaseModel):
     period: int
     action: ActionType
     result: Optional[bool] = False
+    user_id: Optional[int] = None
 
 class ActionCreate(Action):
     pass
@@ -128,3 +132,30 @@ class PlaytimeForMatch(BaseModel):
 class TimeUpdate(BaseModel):
     match_time_registered_s: int
     player_time_registered_s: dict[int, int]  # player_id -> time_played
+    current_period: int
+
+
+class UserRead(BaseModel):
+    id: int
+    username: str
+    is_active: bool
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    username: str
+
+
+class ChangePassword(BaseModel):
+    current_password: str
+    new_password: str

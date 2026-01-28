@@ -1,7 +1,7 @@
 from asyncio import events
 import logging
 
-from nicegui import ui, events
+from nicegui import app, ui, events
 
 from backend.schema import ActionType
 from frontend.api import api_get, api_post, api_put
@@ -36,7 +36,7 @@ class PlayerButton(ui.button):
 
         with self.props.suspend_updates():
             if not self._active:
-                self.props(f'color="blue"')
+                self.props(f'color="grey-4"')
                 self.disable()
             else:
                 self.enable()
@@ -84,6 +84,7 @@ class LiveState:
         self.selected_match_id: Optional[int] = None
         self.selected_match_data: Optional[Dict] = None  # Full match data including is_finalized
         self.selected_player_id: Optional[int] = None
+        self.locked_match_id: Optional[int] = None
 
         # Game Data
         self.actions: List = []
@@ -93,6 +94,9 @@ class LiveState:
         self.clock_running: bool = False
         self.clock_seconds: int = 0
         self.period: int = 1
+        self.period_minutes: int = 25
+        self.total_periods: int = 2
+        self.remaining_seconds: int = 25 * 60
         self.timer = None
 
         self.player_seconds: dict[int, int] = {}  # Current session playtime
@@ -104,10 +108,16 @@ class LiveState:
         
         # Auto-save timer
         self.playtime_save_timer = None
+        self.clock_display = None
 
     @property
     def formatted_time(self):
         mins, secs = divmod(self.clock_seconds, 60)
+        return f"{mins:02d}:{secs:02d}"
+
+    @property
+    def formatted_remaining_time(self):
+        mins, secs = divmod(max(0, self.remaining_seconds), 60)
         return f"{mins:02d}:{secs:02d}"
     
     def formatted_player_time(self, player_id):
@@ -122,13 +132,18 @@ class LiveState:
     def is_match_finalized(self):
         return self.selected_match_data and self.selected_match_data.get("is_finalized", False)
 
-state = LiveState()
+def get_state() -> LiveState:
+    client = ui.context.client
+    if not hasattr(client, "live_state"):
+        client.live_state = LiveState()
+    return client.live_state
 
 
 @ui.page('/live')
 def live_page():
 
     def content():
+        state = get_state()
 
         # ---------------------------------------------------------------
         # HELPERS
@@ -170,6 +185,7 @@ def live_page():
             try:
                 match_data = await api_get(f"/matches/{match_id}")
                 state.selected_match_data = match_data
+                state.period = match_data.get("current_period", state.period)
                 return match_data
             except Exception as e:
                 logger.error(f"Failed to load match data: {e}")
@@ -186,6 +202,9 @@ def live_page():
                 }
                 # Update clock with saved match time
                 state.clock_seconds = playtime_data.get("match_time_registered_s", 0)
+                period_seconds = max(1, state.period_minutes * 60)
+                elapsed_in_period = state.clock_seconds % period_seconds
+                state.remaining_seconds = max(0, period_seconds - elapsed_in_period)
                 logger.info(f"Loaded playtime data: {state.saved_player_seconds}")
                 return playtime_data
             except Exception as e:
@@ -209,7 +228,8 @@ def live_page():
                 
                 time_update = {
                     "match_time_registered_s": state.clock_seconds,
-                    "player_time_registered_s": total_player_times
+                    "player_time_registered_s": total_player_times,
+                    "current_period": state.period,
                 }
                 
                 await api_put(f"/playtime/{state.selected_match_id}", time_update)
@@ -222,10 +242,33 @@ def live_page():
                 
             except Exception as e:
                 logger.error(f"Failed to save playtime data: {e}")
+
+        async def lock_match(match_id: int) -> bool:
+            try:
+                await api_post(f"/matches/{match_id}/lock", {})
+                state.locked_match_id = match_id
+                app.storage.user["locked_match_id"] = match_id
+                return True
+            except Exception as e:
+                detail = str(e)
+                if e.args and isinstance(e.args[0], dict):
+                    detail = e.args[0].get("detail", detail)
+                ui.notify(f"Match is locked: {detail}", type="warning")
+                return False
+
+        async def unlock_match(match_id: int) -> None:
+            try:
+                await api_post(f"/matches/{match_id}/unlock", {})
+            except Exception:
+                return
+            app.storage.user.pop("locked_match_id", None)
         
         async def finalize_match():
             """Finalize the current match"""
             if not state.selected_match_id:
+                return
+            if state.clock_running:
+                ui.notify("Pause the clock before finalizing the match", type="warning")
                 return
             
             # Save playtime before finalizing
@@ -235,10 +278,15 @@ def live_page():
                 # Finalize endpoint doesn't need a body, but api_post expects json
                 match_data = await api_post(f"/matches/{state.selected_match_id}/finalize", {})
                 state.selected_match_data = match_data
+                state.clock_running = False
                 logger.info(f"Match {state.selected_match_id} finalized")
+                if state.locked_match_id:
+                    await unlock_match(state.locked_match_id)
+                    state.locked_match_id = None
                 
                 # Refresh UI to show finalized state
                 clock_area.refresh()
+                finalize_button_area.refresh()
                 render_actions()
                 render_players(state.players)
                 
@@ -256,37 +304,59 @@ def live_page():
         # the ui dialog
         with ui.dialog() as set_time_dialog:
             with ui.card():
-                ui.label("Set Time (Seconds)")
-                set_time_number = ui.number(value=state.clock_seconds)
-                
+                ui.label("Match Settings").classes("text-lg font-bold")
+                minutes_input = ui.number(label="Minutes per half", value=state.period_minutes, min=1)
+                halves_input = ui.number(label="Number of halves", value=state.total_periods, min=1)
+
                 def save():
-                    state.clock_seconds = int(set_time_number.value)
+                    if state.clock_running:
+                        ui.notify("Pause the clock before changing settings", type="warning")
+                        return
+                    state.period_minutes = int(minutes_input.value)
+                    state.total_periods = int(halves_input.value)
+                    state.period = 1
+                    state.clock_seconds = 0
+                    state.remaining_seconds = state.period_minutes * 60
                     clock_area.refresh()
                     set_time_dialog.close()
-                
-                ui.button("Set", on_click=save)
+
+                ui.button("Save", on_click=save)
 
         def toggle_clock():
             if state.is_match_finalized:
                 ui.notify("Cannot modify clock for a finalized match", type="warning")
                 return
+            if state.remaining_seconds <= 0:
+                ui.notify("Reset the clock before starting", type="warning")
+                return
             state.clock_running = not state.clock_running
             clock_area.refresh()
 
         def tick():
-            if state.clock_running:
+            if state.clock_running and state.remaining_seconds > 0:
+                state.remaining_seconds -= 1
                 state.clock_seconds += 1
                 # Update the visual clock
-                if clock_display:
-                    clock_display.text = state.formatted_time
+                if state.clock_display:
+                    state.clock_display.text = state.formatted_remaining_time
 
                 # per-player clocks
                 for pid in state.active_player_ids:
                     state.player_seconds[pid] = state.player_seconds.get(pid, 0) + 1
-                
+
                 # Update player playtime display (only if players are loaded)
                 if state.players:
                     render_players(state.players)
+
+                if state.remaining_seconds == 0:
+                    state.clock_running = False
+                    if state.period < state.total_periods:
+                        state.period += 1
+                        state.remaining_seconds = state.period_minutes * 60
+                        ui.notify("Half ended. Ready for next half.", type="warning")
+                    else:
+                        ui.notify("Match time ended.", type="warning")
+                    clock_area.refresh()
 
 
         def reset_clock():
@@ -295,13 +365,14 @@ def live_page():
                 return
             state.clock_running = False
             state.clock_seconds = 0
+            state.period = 1
+            state.remaining_seconds = state.period_minutes * 60
             clock_area.refresh()
 
         def set_clock_dialog():
             if state.is_match_finalized:
                 ui.notify("Cannot set time for a finalized match", type="warning")
                 return
-            set_time_number.value = state.clock_seconds
             set_time_dialog.open()
         
         # create the timer
@@ -362,14 +433,26 @@ def live_page():
             state.selected_player_id = None
             state.active_player_ids.clear()
             state.players = [] # Clear players            
+            state.clock_running = False
+            state.clock_seconds = 0
+            state.period = 1
+            state.remaining_seconds = state.period_minutes * 60
 
             players_column.clear()
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
+            finalize_button_area.refresh()
 
 
         async def on_match_change(match_id):
             # Save playtime for previous match if exists
             if state.selected_match_id and not state.is_match_finalized:
                 await save_playtime_data()
+
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
             
             state.selected_match_id = match_id
             state.selected_match_data = None
@@ -381,11 +464,26 @@ def live_page():
                 state.saved_player_seconds = {}
                 state.player_seconds = {}
                 state.clock_seconds = 0
+                state.period = 1
+                state.remaining_seconds = state.period_minutes * 60
                 clock_area.refresh()
+                finalize_button_area.refresh()
                 return
             
             # Load match data (including finalized status)
             await load_match_data(match_id)
+            finalize_button_area.refresh()
+
+            if state.is_match_finalized:
+                state.clock_running = False
+                if state.locked_match_id:
+                    await unlock_match(state.locked_match_id)
+                    state.locked_match_id = None
+            else:
+                if not await lock_match(match_id):
+                    match_select.value = None
+                    state.selected_match_id = None
+                    return
             
             # Load playtime data
             await load_playtime_data(match_id)
@@ -394,15 +492,25 @@ def live_page():
             state.players = await load_team_players(state.selected_team_id)
             state.active_player_ids = set()  # Reset active players
             state.player_seconds = {}  # Reset current session times
+            period_seconds = max(1, state.period_minutes * 60)
+            elapsed_in_period = state.clock_seconds % period_seconds
+            state.remaining_seconds = max(0, period_seconds - elapsed_in_period)
 
             render_actions()
             render_players(state.players)
             clock_area.refresh()
+            finalize_button_area.refresh()
             
             # Start auto-save timer (save every 30 seconds)
             if state.playtime_save_timer:
                 state.playtime_save_timer.deactivate()
-            state.playtime_save_timer = ui.timer(30.0, lambda: save_playtime_data(), active=True)
+            if not state.is_match_finalized:
+                state.playtime_save_timer = ui.timer(30.0, lambda: save_playtime_data(), active=True)
+
+        async def handle_disconnect():
+            if state.locked_match_id:
+                await unlock_match(state.locked_match_id)
+                state.locked_match_id = None
 
 
         def on_action_button_click(action_type):
@@ -479,39 +587,46 @@ def live_page():
  
             with players_column:
                 with ui.grid(columns=2).classes("gap-4"):
-                    sorted_players = sorted(
-                        players,
-                        key=lambda p: (
-                            p["id"] not in state.active_player_ids,
-                            p.get("last_name", ""),
-                            p.get("first_name", ""),
-                        ),
-                    )
-                    for p in sorted_players:
-                        player_id = p["id"]
-                        player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
+                    def player_sort_key(player):
+                        return (
+                            player["id"] not in state.active_player_ids,
+                            player.get("last_name", ""),
+                            player.get("first_name", ""),
+                        )
+
+                    def render_player_card(player):
+                        player_id = player["id"]
+                        player_name = f"{player.get('first_name', 'Unknown')} ({player.get('number', '')})"
                         is_active = player_id in state.active_player_ids
                         is_selected = (state.selected_player_id == player_id)
 
-                        # Create button
                         with ui.grid().classes("grid-cols-[auto_3rem_4rem] items-center gap-2"):
-
-                            # Create the ToggleButton
                             btn = PlayerButton(
                                 player_id=player_id,
                                 player_name=player_name,
                                 active=is_active,
                                 selected=is_selected,
                                 on_click=on_player_button_click,
-                            )#.classes("w-32 items-start")
-                            
-                            # Use lambda with default arguments to freeze the values of player_id and btn
-                            player_switch = ui.switch(value=is_active, on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button))
+                            )
+                            player_switch = ui.switch(
+                                value=is_active,
+                                on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button),
+                            )
                             if state.is_match_finalized:
                                 player_switch.disable()
 
-                            # playtime (shows total: saved + current session)
                             ui.label(state.formatted_player_time(player_id)).classes("text-xs text-grey-6")
+
+                    female_players = [p for p in players if p.get("sex") == "female"]
+                    male_players = [p for p in players if p.get("sex") == "male"]
+
+                    with ui.column().classes("gap-2"):
+                        for p in sorted(female_players, key=player_sort_key):
+                            render_player_card(p)
+
+                    with ui.column().classes("gap-2"):
+                        for p in sorted(male_players, key=player_sort_key):
+                            render_player_card(p)
 
         # ---------------------------------------------------------
         # UI COMPONENTS (REFRESHABLE)
@@ -541,8 +656,7 @@ def live_page():
                     ui.separator().props("vertical").classes("mx-4")
                     
                     # Time Display
-                    global clock_display
-                    clock_display = ui.label(state.formatted_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
+                    state.clock_display = ui.label(state.formatted_remaining_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
                     
                     ui.separator().props("vertical").classes("mx-4")
 
@@ -555,6 +669,16 @@ def live_page():
                     
                     if state.is_match_finalized:
                         clock_button.disable()
+
+        @ui.refreshable
+        def finalize_button_area():
+            if state.selected_match_id and not state.is_match_finalized:
+                ui.button(
+                    "Finalize Match",
+                    on_click=finalize_match,
+                    color="red",
+                    icon="lock",
+                ).classes("ml-2")
                     
 
         def mouse_handler(e: events.MouseEventArguments):
@@ -572,6 +696,7 @@ def live_page():
         # ---------------------------------------------------------------
         # UI LAYOUT
         # ---------------------------------------------------------------
+        ui.context.client.on_disconnect(handle_disconnect)
         ui.markdown("### 🏷️ Match Actions")
 
         with ui.row().classes("items-center gap-4"):
@@ -595,22 +720,14 @@ def live_page():
                     ui.menu_item("Reset", on_click=reset_clock)
                     ui.separator()
                     ui.menu_item("Save Playtime", on_click=lambda: save_playtime_data())
-                    if state.selected_match_id:
-                        finalize_item = ui.menu_item(
-                            "Finalize Match" if not state.is_match_finalized else "Match Finalized",
-                            on_click=lambda: finalize_match() if not state.is_match_finalized else None
-                        )
-                        if state.is_match_finalized:
-                            finalize_item.disable()
+                    finalize_item = ui.menu_item(
+                        "Finalize Match" if not state.is_match_finalized else "Match Finalized",
+                        on_click=lambda: finalize_match() if (state.selected_match_id and not state.is_match_finalized) else None,
+                    )
+                    if not state.selected_match_id or state.is_match_finalized:
+                        finalize_item.disable()
             
-            # Finalize button (more prominent)
-            if state.selected_match_id and not state.is_match_finalized:
-                ui.button(
-                    "Finalize Match",
-                    on_click=finalize_match,
-                    color="red",
-                    icon="lock"
-                ).classes("ml-2") 
+            finalize_button_area()
 
 
         with ui.row():

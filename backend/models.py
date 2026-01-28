@@ -1,8 +1,8 @@
-from sqlalchemy import Boolean, Integer, String, UniqueConstraint, ForeignKey, Enum, Table, Column, text
+from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint, ForeignKey, Enum, Table, Column, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 from .schema import ActionType, MatchType, SexType
@@ -68,10 +68,14 @@ class Match(Base):
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     match_type: Mapped[Optional[MatchType]] = mapped_column(Enum(MatchType), default=MatchType.NORMAL)
     time_registered_s: Mapped[int] = mapped_column(Integer, default=0)  # in seconds
+    current_period: Mapped[int] = mapped_column(Integer, default=1)
     is_finalized: Mapped[bool] = mapped_column(Boolean, default=False)
+    locked_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"), nullable=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
     team: Mapped["Team"] = relationship("Team", back_populates="matches")
+    locked_by: Mapped[Optional["User"]] = relationship("User")
 
 
 class Action(Base):
@@ -81,6 +85,7 @@ class Action(Base):
 
     match_id: Mapped[int] = mapped_column(ForeignKey("match.id"))
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"), nullable=True)
 
     timestamp: Mapped[int] = mapped_column()
     x: Mapped[Optional[float]] = mapped_column(nullable=True)
@@ -91,6 +96,17 @@ class Action(Base):
  
     match: Mapped["Match"] = relationship("Match")
     player: Mapped["Player"] = relationship("Player")
+    user: Mapped[Optional["User"]] = relationship("User")
+
+
+class User(Base):
+    __tablename__ = "user"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Playtime(Base):
@@ -111,6 +127,9 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_action_coordinates_nullable(conn)
+        await _migrate_action_user_id_nullable(conn)
+        await _migrate_match_lock_columns(conn)
+        await _migrate_match_current_period(conn)
 
 
 async def _migrate_action_coordinates_nullable(conn) -> None:
@@ -158,3 +177,31 @@ async def _migrate_action_coordinates_nullable(conn) -> None:
         raise
     finally:
         await conn.execute(text("PRAGMA foreign_keys=on"))
+
+
+async def _migrate_action_user_id_nullable(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(action)"))
+    columns = {row[1]: row for row in result.fetchall()}
+    if not columns or "user_id" in columns:
+        return
+    await conn.execute(text("ALTER TABLE action ADD COLUMN user_id INTEGER"))
+
+
+async def _migrate_match_lock_columns(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(match)"))
+    columns = {row[1]: row for row in result.fetchall()}
+    if not columns:
+        return
+    if "locked_by_user_id" not in columns:
+        await conn.execute(text("ALTER TABLE match ADD COLUMN locked_by_user_id INTEGER"))
+    if "locked_at" not in columns:
+        await conn.execute(text("ALTER TABLE match ADD COLUMN locked_at DATETIME"))
+
+
+async def _migrate_match_current_period(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(match)"))
+    columns = {row[1]: row for row in result.fetchall()}
+    if not columns:
+        return
+    if "current_period" not in columns:
+        await conn.execute(text("ALTER TABLE match ADD COLUMN current_period INTEGER DEFAULT 1"))
