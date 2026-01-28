@@ -36,7 +36,7 @@ class PlayerButton(ui.button):
 
         with self.props.suspend_updates():
             if not self._active:
-                self.props(f'color="blue"')
+                self.props(f'color="grey-4"')
                 self.disable()
             else:
                 self.enable()
@@ -269,6 +269,7 @@ def live_page():
                 
                 # Refresh UI to show finalized state
                 clock_area.refresh()
+                finalize_button_area.refresh()
                 render_actions()
                 render_players(state.players)
                 
@@ -397,6 +398,7 @@ def live_page():
             if state.locked_match_id:
                 await unlock_match(state.locked_match_id)
                 state.locked_match_id = None
+            finalize_button_area.refresh()
 
 
         async def on_match_change(match_id):
@@ -419,6 +421,7 @@ def live_page():
                 state.player_seconds = {}
                 state.clock_seconds = 0
                 clock_area.refresh()
+                finalize_button_area.refresh()
                 return
 
             if not await lock_match(match_id):
@@ -428,6 +431,7 @@ def live_page():
             
             # Load match data (including finalized status)
             await load_match_data(match_id)
+            finalize_button_area.refresh()
             
             # Load playtime data
             await load_playtime_data(match_id)
@@ -440,6 +444,7 @@ def live_page():
             render_actions()
             render_players(state.players)
             clock_area.refresh()
+            finalize_button_area.refresh()
             
             # Start auto-save timer (save every 30 seconds)
             if state.playtime_save_timer:
@@ -601,6 +606,16 @@ def live_page():
                     
                     if state.is_match_finalized:
                         clock_button.disable()
+
+        @ui.refreshable
+        def finalize_button_area():
+            if state.selected_match_id and not state.is_match_finalized:
+                ui.button(
+                    "Finalize Match",
+                    on_click=finalize_match,
+                    color="red",
+                    icon="lock",
+                ).classes("ml-2")
                     
 
         def mouse_handler(e: events.MouseEventArguments):
@@ -642,22 +657,14 @@ def live_page():
                     ui.menu_item("Reset", on_click=reset_clock)
                     ui.separator()
                     ui.menu_item("Save Playtime", on_click=lambda: save_playtime_data())
-                    if state.selected_match_id:
-                        finalize_item = ui.menu_item(
-                            "Finalize Match" if not state.is_match_finalized else "Match Finalized",
-                            on_click=lambda: finalize_match() if not state.is_match_finalized else None
-                        )
-                        if state.is_match_finalized:
-                            finalize_item.disable()
+                    finalize_item = ui.menu_item(
+                        "Finalize Match" if not state.is_match_finalized else "Match Finalized",
+                        on_click=lambda: finalize_match() if (state.selected_match_id and not state.is_match_finalized) else None,
+                    )
+                    if not state.selected_match_id or state.is_match_finalized:
+                        finalize_item.disable()
             
-            # Finalize button (more prominent)
-            if state.selected_match_id and not state.is_match_finalized:
-                ui.button(
-                    "Finalize Match",
-                    on_click=finalize_match,
-                    color="red",
-                    icon="lock"
-                ).classes("ml-2") 
+            finalize_button_area()
 
 
         with ui.row():

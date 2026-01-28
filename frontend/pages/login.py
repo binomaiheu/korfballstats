@@ -22,7 +22,8 @@ def login_page():
         ui.navigate.to("/live")
 
     with ui.column().classes("w-full items-center justify-center mt-12"):
-        ui.label("Login").classes("text-2xl font-bold")
+        ui.image("logo_ganda.jpg").classes("w-48")
+        ui.label("Login").classes("text-2xl font-bold mt-4")
         username_input = ui.input("Username").classes("w-72")
         password_input = ui.input("Password", password=True, password_toggle_button=True).classes("w-72")
         ui.button("Sign in", on_click=handle_login).classes("w-72")

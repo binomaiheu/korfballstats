@@ -53,3 +53,10 @@ async def api_login(username: str, password: str):
             if r.status >= 400:
                 raise Exception(data)
             return data
+
+
+async def api_change_password(current_password: str, new_password: str):
+    return await api_post(
+        "/auth/change-password",
+        {"current_password": current_password, "new_password": new_password},
+    )
