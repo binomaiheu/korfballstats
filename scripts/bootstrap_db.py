@@ -5,8 +5,9 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import requests
+import yaml
 
 
 DEFAULT_BASE_URL = "http://localhost:8855/api/v1"
@@ -15,33 +16,32 @@ DEFAULT_BASE_URL = "http://localhost:8855/api/v1"
 def http_json(method: str, path: str, payload: dict | None = None) -> Any:
     base_url = os.getenv("KORFBALL_API_URL", DEFAULT_BASE_URL).rstrip("/")
     url = f"{base_url}{path}"
-    data = None
-    headers = {"Content-Type": "application/json"}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    req = Request(url, data=data, headers=headers, method=method)
-    with urlopen(req, timeout=10) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body) if body else None
+    response = requests.request(method, url, json=payload, timeout=10)
+    response.raise_for_status()
+    if not response.content:
+        return None
+    return response.json()
 
 
 def safe_post(path: str, payload: dict) -> Any:
     try:
         return http_json("POST", path, payload)
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8")
-        try:
-            detail = json.loads(body)
-        except json.JSONDecodeError:
-            detail = body
-        raise RuntimeError(f"POST {path} failed: {exc.code} {detail}") from exc
+    except requests.HTTPError as exc:
+        response = exc.response
+        detail = None
+        if response is not None and response.content:
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+        raise RuntimeError(f"POST {path} failed: {response.status_code if response else ''} {detail}") from exc
 
 
 def fetch_list(path: str) -> list[dict]:
     try:
         data = http_json("GET", path)
         return data if isinstance(data, list) else []
-    except (HTTPError, URLError) as exc:
+    except requests.RequestException as exc:
         raise RuntimeError(f"GET {path} failed: {exc}") from exc
 
 
@@ -89,43 +89,32 @@ def assign_player(team_id: int, player_id: int) -> None:
             raise
 
 
-def parse_inline_list(value: str) -> list[int]:
-    if "[" not in value or "]" not in value:
-        return []
-    raw = value.split("[", 1)[1].split("]", 1)[0]
-    items = []
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        items.append(int(part))
-    return items
-
-
 def parse_teams_yaml(path: Path) -> tuple[Path, list[dict]]:
-    players_csv = None
-    teams: list[dict] = []
-    current_team = None
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise RuntimeError("teams.yaml must contain a mapping")
 
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line:
-            continue
-        if line.startswith("players:"):
-            players_csv = line.split("players:", 1)[1].strip()
-            continue
-        if line.lstrip().startswith("- name:"):
-            name = line.split("- name:", 1)[1].strip()
-            current_team = {"name": name, "players": []}
-            teams.append(current_team)
-            continue
-        if "players:" in line and current_team is not None:
-            current_team["players"] = parse_inline_list(line)
-
-    if players_csv is None:
+    players_csv = data.get("players")
+    if not players_csv:
         raise RuntimeError("teams.yaml is missing a 'players:' entry")
 
-    return (path.parent / players_csv).resolve(), teams
+    teams = data.get("teams")
+    if not isinstance(teams, list):
+        raise RuntimeError("teams.yaml is missing a 'teams:' list")
+
+    normalized = []
+    for team in teams:
+        if not isinstance(team, dict):
+            raise RuntimeError("Each team entry must be a mapping")
+        name = team.get("name")
+        if not name:
+            raise RuntimeError("Each team entry must include a name")
+        players = team.get("players", [])
+        if not isinstance(players, list):
+            raise RuntimeError(f"Team '{name}' players must be a list")
+        normalized.append({"name": name, "players": [int(num) for num in players]})
+
+    return (path.parent / str(players_csv)).resolve(), normalized
 
 
 def load_players_csv(path: Path) -> list[dict]:
