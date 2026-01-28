@@ -83,12 +83,4 @@ The bootstrap script can also use:
 
 ## API
 
-The front end application is mounting on the host at `/`, the back-end FastAPI api is mounted under `/api/v1`. Hence, you can access the swagger documentation at : `http://localhost:8855/api/v1/docs`
-
-## Deployment
-
-t.b.a. 
-
-- github actions
-- Dockerfile
-- digital ocean deploy hook etc...
+The front end application is mounting on the host at `/`, the back-end FastAPI api is mounted under `/api/v1`. Hence, you can access the swagger documentation at : `http://localhost:8855/api/v1/docs
