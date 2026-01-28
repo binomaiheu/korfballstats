@@ -68,6 +68,7 @@ class Match(Base):
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     match_type: Mapped[Optional[MatchType]] = mapped_column(Enum(MatchType), default=MatchType.NORMAL)
     time_registered_s: Mapped[int] = mapped_column(Integer, default=0)  # in seconds
+    current_period: Mapped[int] = mapped_column(Integer, default=1)
     is_finalized: Mapped[bool] = mapped_column(Boolean, default=False)
     locked_by_user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"), nullable=True)
     locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -128,6 +129,7 @@ async def init_db():
         await _migrate_action_coordinates_nullable(conn)
         await _migrate_action_user_id_nullable(conn)
         await _migrate_match_lock_columns(conn)
+        await _migrate_match_current_period(conn)
 
 
 async def _migrate_action_coordinates_nullable(conn) -> None:
@@ -194,3 +196,12 @@ async def _migrate_match_lock_columns(conn) -> None:
         await conn.execute(text("ALTER TABLE match ADD COLUMN locked_by_user_id INTEGER"))
     if "locked_at" not in columns:
         await conn.execute(text("ALTER TABLE match ADD COLUMN locked_at DATETIME"))
+
+
+async def _migrate_match_current_period(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(match)"))
+    columns = {row[1]: row for row in result.fetchall()}
+    if not columns:
+        return
+    if "current_period" not in columns:
+        await conn.execute(text("ALTER TABLE match ADD COLUMN current_period INTEGER DEFAULT 1"))

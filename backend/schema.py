@@ -82,6 +82,7 @@ class MatchRead(BaseModel):
     location: Optional[str] = None
     match_type: Optional[MatchType] = MatchType.NORMAL
     time_registered_s: int
+    current_period: int = 1
     is_finalized: bool
     locked_by_user_id: Optional[int] = None
     locked_at: Optional[datetime] = None
@@ -131,6 +132,7 @@ class PlaytimeForMatch(BaseModel):
 class TimeUpdate(BaseModel):
     match_time_registered_s: int
     player_time_registered_s: dict[int, int]  # player_id -> time_played
+    current_period: int
 
 
 class UserRead(BaseModel):

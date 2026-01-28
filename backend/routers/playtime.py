@@ -84,6 +84,7 @@ async def update_playtime_for_match(
     
     # Update match time
     match.time_registered_s = time_update.match_time_registered_s
+    match.current_period = time_update.current_period
     
     # Update or create player playtimes
     for player_id, time_played in time_update.player_time_registered_s.items():
