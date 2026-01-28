@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+import argparse
+import csv
+import json
+import os
+from pathlib import Path
+from typing import Any, Iterable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+DEFAULT_BASE_URL = "http://localhost:8855/api/v1"
+
+
+def http_json(method: str, path: str, payload: dict | None = None) -> Any:
+    base_url = os.getenv("KORFBALL_API_URL", DEFAULT_BASE_URL).rstrip("/")
+    url = f"{base_url}{path}"
+    data = None
+    headers = {"Content-Type": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    req = Request(url, data=data, headers=headers, method=method)
+    with urlopen(req, timeout=10) as response:
+        body = response.read().decode("utf-8")
+        return json.loads(body) if body else None
+
+
+def safe_post(path: str, payload: dict) -> Any:
+    try:
+        return http_json("POST", path, payload)
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            detail = json.loads(body)
+        except json.JSONDecodeError:
+            detail = body
+        raise RuntimeError(f"POST {path} failed: {exc.code} {detail}") from exc
+
+
+def fetch_list(path: str) -> list[dict]:
+    try:
+        data = http_json("GET", path)
+        return data if isinstance(data, list) else []
+    except (HTTPError, URLError) as exc:
+        raise RuntimeError(f"GET {path} failed: {exc}") from exc
+
+
+def find_team(existing: Iterable[dict], name: str) -> dict | None:
+    for team in existing:
+        if team.get("name") == name:
+            return team
+    return None
+
+
+def find_player(existing: Iterable[dict], player: dict) -> dict | None:
+    for item in existing:
+        if (
+            item.get("first_name") == player.get("first_name")
+            and item.get("last_name") == player.get("last_name")
+        ):
+            return item
+    return None
+
+
+def ensure_team(existing: list[dict], name: str) -> dict:
+    found = find_team(existing, name)
+    if found:
+        return found
+    created = safe_post("/teams", {"name": name})
+    existing.append(created)
+    return created
+
+
+def ensure_player(existing: list[dict], player: dict) -> dict:
+    found = find_player(existing, player)
+    if found:
+        return found
+    created = safe_post("/players", player)
+    existing.append(created)
+    return created
+
+
+def assign_player(team_id: int, player_id: int) -> None:
+    try:
+        safe_post("/teams/assign", {"team_id": team_id, "player_id": player_id})
+    except RuntimeError as exc:
+        message = str(exc)
+        if "already assigned" not in message:
+            raise
+
+
+def parse_inline_list(value: str) -> list[int]:
+    if "[" not in value or "]" not in value:
+        return []
+    raw = value.split("[", 1)[1].split("]", 1)[0]
+    items = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        items.append(int(part))
+    return items
+
+
+def parse_teams_yaml(path: Path) -> tuple[Path, list[dict]]:
+    players_csv = None
+    teams: list[dict] = []
+    current_team = None
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("#", 1)[0].rstrip()
+        if not line:
+            continue
+        if line.startswith("players:"):
+            players_csv = line.split("players:", 1)[1].strip()
+            continue
+        if line.lstrip().startswith("- name:"):
+            name = line.split("- name:", 1)[1].strip()
+            current_team = {"name": name, "players": []}
+            teams.append(current_team)
+            continue
+        if "players:" in line and current_team is not None:
+            current_team["players"] = parse_inline_list(line)
+
+    if players_csv is None:
+        raise RuntimeError("teams.yaml is missing a 'players:' entry")
+
+    return (path.parent / players_csv).resolve(), teams
+
+
+def load_players_csv(path: Path) -> list[dict]:
+    players = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if not row or row[0].startswith("#"):
+                continue
+            if len(row) < 4:
+                raise RuntimeError(f"Invalid row in players CSV: {row}")
+            first_name, last_name, number, sex = [part.strip() for part in row[:4]]
+            players.append(
+                {
+                    "number": int(number),
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "sex": sex,
+                }
+            )
+    return players
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Bootstrap teams and players via API.")
+    parser.add_argument(
+        "--teams",
+        default="teams.yaml",
+        help="Path to teams.yaml (default: teams.yaml)",
+    )
+    args = parser.parse_args()
+
+    teams_path = Path(args.teams).resolve()
+    players_csv_path, teams = parse_teams_yaml(teams_path)
+    players = load_players_csv(players_csv_path)
+
+    existing_teams = fetch_list("/teams")
+    existing_players = fetch_list("/players")
+
+    team_ids = {}
+    for team in teams:
+        team_name = team["name"]
+        created_team = ensure_team(existing_teams, team_name)
+        team_ids[team_name] = created_team["id"]
+
+    player_ids = {}
+    for player in players:
+        created = ensure_player(existing_players, player)
+        player_ids[player["number"]] = created["id"]
+
+    for team in teams:
+        team_id = team_ids[team["name"]]
+        for number in team["players"]:
+            player_id = player_ids.get(number)
+            if not player_id:
+                raise RuntimeError(f"Player number {number} not found in players CSV")
+            assign_player(team_id, player_id)
+
+    print("Bootstrap complete.")
+
+
+if __name__ == "__main__":
+    main()

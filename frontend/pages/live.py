@@ -456,7 +456,8 @@ def live_page():
             else:
                 state.active_player_ids.discard(pid)
             
-            button.update() 
+            button.update()
+            render_players(state.players)
 
 
         def render_actions():
@@ -465,7 +466,7 @@ def live_page():
             with action_column:
                 for action_type in ActionType:
                     act_btn = ActionButton(
-                        action_type, 
+                        action_type,
                         action_type == state.current_action,
                         on_click=on_action_button_click
                     )
@@ -478,7 +479,15 @@ def live_page():
  
             with players_column:
                 with ui.grid(columns=2).classes("gap-4"):
-                    for p in players:
+                    sorted_players = sorted(
+                        players,
+                        key=lambda p: (
+                            p["id"] not in state.active_player_ids,
+                            p.get("last_name", ""),
+                            p.get("first_name", ""),
+                        ),
+                    )
+                    for p in sorted_players:
                         player_id = p["id"]
                         player_name = f"{p.get('first_name', 'Unknown')} ({p.get('number', '')})"
                         is_active = player_id in state.active_player_ids
@@ -607,24 +616,13 @@ def live_page():
         with ui.row():
             clock_area()
 
-        with ui.row():
-            src = 'korfball_field.svg'
-            #src = 'korfball.svg'
-            #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
-            with ui.card():
-                ui.label("Playfield").classes("text-xs font-bold text-grey-6")
-                ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
-
-        with ui.row():
+        with ui.row().classes("items-start gap-4"):
             with ui.card():
                 ui.label("Actions").classes("text-xs font-bold text-grey-6")
-                action_column = ui.column()
-            with ui.card():
-                ui.label("Players").classes("text-xs font-bold text-grey-6")
-                players_column = ui.column()
+                action_column = ui.row().classes("items-center gap-2 flex-wrap")
             with ui.card():
                 ui.label("Result").classes("text-xs font-bold text-grey-6")
-                with ui.row():
+                with ui.row().classes("items-center gap-2"):
                     ok_button = ui.button(
                         "Ok / Score",
                         on_click=lambda x: submit(True),
@@ -632,7 +630,6 @@ def live_page():
                     )
                     if state.is_match_finalized:
                         ok_button.disable()
-                with ui.row():
                     miss_button = ui.button(
                         "Gemist",
                         on_click=lambda x: submit(False),
@@ -640,6 +637,17 @@ def live_page():
                     )
                     if state.is_match_finalized:
                         miss_button.disable()
+
+        with ui.row().classes("items-start gap-4"):
+            src = 'korfball_field.svg'
+            #src = 'korfball.svg'
+            #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
+            with ui.card():
+                ui.label("Playfield").classes("text-xs font-bold text-grey-6")
+                ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
+            with ui.card():
+                ui.label("Players").classes("text-xs font-bold text-grey-6")
+                players_column = ui.column()
 
 
 

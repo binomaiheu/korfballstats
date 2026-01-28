@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Integer, String, UniqueConstraint, ForeignKey, Enum, Table, Column
+from sqlalchemy import Boolean, Integer, String, UniqueConstraint, ForeignKey, Enum, Table, Column, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from typing import Optional, List
@@ -83,8 +83,8 @@ class Action(Base):
     player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
 
     timestamp: Mapped[int] = mapped_column()
-    x: Mapped[float] = mapped_column()
-    y: Mapped[float] = mapped_column()
+    x: Mapped[Optional[float]] = mapped_column(nullable=True)
+    y: Mapped[Optional[float]] = mapped_column(nullable=True)
     period: Mapped[int] = mapped_column()
     action: Mapped[ActionType] = mapped_column(Enum(ActionType))
     result: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -110,3 +110,51 @@ class Playtime(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_action_coordinates_nullable(conn)
+
+
+async def _migrate_action_coordinates_nullable(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(action)"))
+    columns = {row[1]: row for row in result.fetchall()}  # name -> row tuple
+    if not columns:
+        return
+    x_info = columns.get("x")
+    y_info = columns.get("y")
+    if not x_info or not y_info:
+        return
+    x_notnull = bool(x_info[3])
+    y_notnull = bool(y_info[3])
+    if not (x_notnull or y_notnull):
+        return
+
+    await conn.execute(text("PRAGMA foreign_keys=off"))
+    await conn.execute(text("BEGIN"))
+    try:
+        await conn.execute(text("ALTER TABLE action RENAME TO action_old"))
+        await conn.execute(text("""
+            CREATE TABLE action (
+                id INTEGER PRIMARY KEY,
+                match_id INTEGER NOT NULL,
+                player_id INTEGER NOT NULL,
+                timestamp INTEGER NOT NULL,
+                x FLOAT,
+                y FLOAT,
+                period INTEGER NOT NULL,
+                action VARCHAR NOT NULL,
+                result BOOLEAN NOT NULL DEFAULT 0,
+                FOREIGN KEY(match_id) REFERENCES match(id),
+                FOREIGN KEY(player_id) REFERENCES player(id)
+            )
+        """))
+        await conn.execute(text("""
+            INSERT INTO action (id, match_id, player_id, timestamp, x, y, period, action, result)
+            SELECT id, match_id, player_id, timestamp, x, y, period, action, result
+            FROM action_old
+        """))
+        await conn.execute(text("DROP TABLE action_old"))
+        await conn.execute(text("COMMIT"))
+    except Exception:
+        await conn.execute(text("ROLLBACK"))
+        raise
+    finally:
+        await conn.execute(text("PRAGMA foreign_keys=on"))
