@@ -86,7 +86,8 @@ class Action(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
     match_id: Mapped[int] = mapped_column(ForeignKey("match.id"))
-    player_id: Mapped[int] = mapped_column(ForeignKey("player.id"))
+    player_id: Mapped[Optional[int]] = mapped_column(ForeignKey("player.id"), nullable=True)
+    is_opponent: Mapped[bool] = mapped_column(Boolean, default=False)
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("user.id"), nullable=True)
 
     timestamp: Mapped[int] = mapped_column()
@@ -130,6 +131,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_action_coordinates_nullable(conn)
         await _migrate_action_user_id_nullable(conn)
+        await _migrate_action_opponent_fields(conn)
         await _migrate_match_lock_columns(conn)
         await _migrate_match_current_period(conn)
         await _migrate_match_time_settings(conn)
@@ -188,6 +190,50 @@ async def _migrate_action_user_id_nullable(conn) -> None:
     if not columns or "user_id" in columns:
         return
     await conn.execute(text("ALTER TABLE action ADD COLUMN user_id INTEGER"))
+
+
+async def _migrate_action_opponent_fields(conn) -> None:
+    result = await conn.execute(text("PRAGMA table_info(action)"))
+    columns = {row[1]: row for row in result.fetchall()}
+    if not columns:
+        return
+    if "is_opponent" not in columns:
+        await conn.execute(text("ALTER TABLE action ADD COLUMN is_opponent BOOLEAN DEFAULT 0"))
+    player_info = columns.get("player_id")
+    if player_info and player_info[3]:
+        await conn.execute(text("PRAGMA foreign_keys=off"))
+        await conn.execute(text("BEGIN"))
+        try:
+            await conn.execute(text("ALTER TABLE action RENAME TO action_old"))
+            await conn.execute(text("""
+                CREATE TABLE action (
+                    id INTEGER PRIMARY KEY,
+                    match_id INTEGER NOT NULL,
+                    player_id INTEGER,
+                    is_opponent BOOLEAN DEFAULT 0,
+                    timestamp INTEGER NOT NULL,
+                    x FLOAT,
+                    y FLOAT,
+                    period INTEGER NOT NULL,
+                    action VARCHAR NOT NULL,
+                    result BOOLEAN NOT NULL DEFAULT 0,
+                    user_id INTEGER,
+                    FOREIGN KEY(match_id) REFERENCES match(id),
+                    FOREIGN KEY(player_id) REFERENCES player(id)
+                )
+            """))
+            await conn.execute(text("""
+                INSERT INTO action (id, match_id, player_id, is_opponent, timestamp, x, y, period, action, result, user_id)
+                SELECT id, match_id, player_id, COALESCE(is_opponent, 0), timestamp, x, y, period, action, result, user_id
+                FROM action_old
+            """))
+            await conn.execute(text("DROP TABLE action_old"))
+            await conn.execute(text("COMMIT"))
+        except Exception:
+            await conn.execute(text("ROLLBACK"))
+            raise
+        finally:
+            await conn.execute(text("PRAGMA foreign_keys=on"))
 
 
 async def _migrate_match_lock_columns(conn) -> None:

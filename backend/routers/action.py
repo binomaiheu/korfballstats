@@ -32,6 +32,8 @@ async def add_action(
     await ensure_lock_owner(session, match, user)
 
     action_payload = action.model_dump()
+    if action_payload.get("is_opponent"):
+        action_payload["player_id"] = None
     action_payload["user_id"] = user.id
     action = Action(**action_payload)
 

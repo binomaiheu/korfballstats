@@ -13,6 +13,7 @@ class ActionType(str, Enum):
     REBOUND = "rebound"
     ASSIST = "assist"
     STEAL = "steal"
+    OPPONENT_GOAL = "opponent_goal"
 
 class SexType(str, Enum):
     MALE = "male"
@@ -98,7 +99,7 @@ class MatchRead(BaseModel):
 # -- Event models
 class Action(BaseModel):
     match_id: int
-    player_id: int
+    player_id: Optional[int] = None
 
     timestamp: int
     x: Optional[float] = None
@@ -107,6 +108,7 @@ class Action(BaseModel):
     action: ActionType
     result: Optional[bool] = False
     user_id: Optional[int] = None
+    is_opponent: bool = False
 
 class ActionCreate(Action):
     pass

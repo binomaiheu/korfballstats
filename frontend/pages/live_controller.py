@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Callable, Awaitable
 
 from nicegui import app, ui
 
-from frontend.api import api_get, api_post, api_put
+from frontend.api import api_delete, api_get, api_post, api_put
 
 logger = logging.getLogger('uvicorn.error')
 
@@ -179,6 +179,15 @@ class LiveController:
             logger.error(f"Failed to finalize match: {e}")
             raise
 
+    async def load_match_actions(self, match_id: int):
+        return await api_get(f"/matches/{match_id}/actions")
+
+    async def update_action(self, action_id: int, payload: dict):
+        return await api_put(f"/actions/{action_id}", payload)
+
+    async def delete_action(self, action_id: int):
+        await api_delete(f"/actions/{action_id}")
+
     def apply_match_settings(self, minutes: int, halves: int):
         self.state.period_minutes = minutes
         self.state.total_periods = halves
@@ -205,7 +214,7 @@ class LiveController:
 
     def tick(
         self,
-        render_players: Callable[[List], None],
+        update_players: Callable[[], None],
         notify: Callable[[str], None],
         refresh_clock: Callable[[], None],
     ) -> None:
@@ -219,7 +228,7 @@ class LiveController:
                 self.state.player_seconds[pid] = self.state.player_seconds.get(pid, 0) + 1
 
             if self.state.players:
-                render_players(self.state.players)
+                update_players()
 
             if self.state.remaining_seconds == 0:
                 self.state.clock_running = False
