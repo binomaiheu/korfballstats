@@ -11,6 +11,7 @@ from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import ActionRead, ActionCreate
 from backend.models import Action, Match, User
+from backend.services.match_service import ensure_lock_owner, ensure_not_finalized
 
 
 router = APIRouter(prefix="/actions", tags=["Actions"], dependencies=[Depends(get_current_user)])
@@ -27,14 +28,8 @@ async def add_action(
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
     
-    if match.is_finalized:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot add actions to a finalized match"
-        )
-
-    if match.locked_by_user_id and match.locked_by_user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
+    ensure_not_finalized(match, "Cannot add actions to a finalized match")
+    await ensure_lock_owner(session, match, user)
 
     action_payload = action.model_dump()
     action_payload["user_id"] = user.id
@@ -79,11 +74,9 @@ async def edit_action(
     
     # Check if match is finalized
     match = await session.get(Match, action.match_id)
-    if match and match.is_finalized:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot edit actions in a finalized match"
-        )
+    if match:
+        ensure_not_finalized(match, "Cannot edit actions in a finalized match")
+        await ensure_lock_owner(session, match, user)
     
     if match.locked_by_user_id and match.locked_by_user_id != user.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
@@ -120,13 +113,9 @@ async def remove_action(
     
     # Check if match is finalized
     match = await session.get(Match, action.match_id)
-    if match and match.is_finalized:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot delete actions from a finalized match"
-        )
-    if match and match.locked_by_user_id and match.locked_by_user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
+    if match:
+        ensure_not_finalized(match, "Cannot delete actions from a finalized match")
+        await ensure_lock_owner(session, match, user)
 
     try:
         await session.delete(action)

@@ -29,6 +29,19 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
+def validate_new_password(password: str) -> list[str]:
+    errors = []
+    if len(password) < 8:
+        errors.append("New password must be at least 8 characters")
+    if not any(ch.isalpha() for ch in password):
+        errors.append("New password must include at least one letter")
+    if not any(ch.isdigit() for ch in password):
+        errors.append("New password must include at least one number")
+    if not any(not ch.isalnum() for ch in password):
+        errors.append("New password must include at least one special character")
+    return errors
+
+
 def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
     if expires_delta is None:
         expires_delta = timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)

@@ -14,6 +14,7 @@ from backend.db import get_session
 from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 from backend.schema import ActionRead
 from backend.models import Match, Action, Team, User
+from backend.services.match_service import ensure_lock_owner, ensure_not_finalized, get_match_or_404
 
 from logging import getLogger
 
@@ -155,17 +156,9 @@ async def finalize_match(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    match = await session.get(Match, match_id)
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+    match = await get_match_or_404(session, match_id)
 
-    if match.locked_by_user_id and match.locked_by_user_id != user.id:
-        locked_by = await session.get(User, match.locked_by_user_id)
-        locked_name = locked_by.username if locked_by else "another user"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Match is locked by {locked_name}",
-        )
+    await ensure_lock_owner(session, match, user)
 
     match.is_finalized = True
 
@@ -187,15 +180,9 @@ async def finalize_match(
 
 @router.post("/{match_id}/time_registered", response_model=MatchRead)
 async def register_time(match_id: int, t_reg: int, session: AsyncSession = Depends(get_session)):
-    match = await session.get(Match, match_id)
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+    match = await get_match_or_404(session, match_id)
     
-    if match.is_finalized:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot update time for a finalized match"
-        )
+    ensure_not_finalized(match, "Cannot update time for a finalized match")
 
     match.time_registered_s = t_reg
 
@@ -222,20 +209,11 @@ async def lock_match(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    match = await session.get(Match, match_id)
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+    match = await get_match_or_404(session, match_id)
 
-    if match.is_finalized:
-        raise HTTPException(status_code=400, detail="Cannot lock a finalized match")
+    ensure_not_finalized(match, "Cannot lock a finalized match")
 
-    if match.locked_by_user_id and match.locked_by_user_id != user.id:
-        locked_by = await session.get(User, match.locked_by_user_id)
-        locked_name = locked_by.username if locked_by else "another user"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Match is locked by {locked_name}",
-        )
+    await ensure_lock_owner(session, match, user)
 
     match.locked_by_user_id = user.id
     match.locked_at = datetime.now(timezone.utc)
@@ -256,17 +234,9 @@ async def unlock_match(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    match = await session.get(Match, match_id)
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
+    match = await get_match_or_404(session, match_id)
 
-    if match.locked_by_user_id and match.locked_by_user_id != user.id:
-        locked_by = await session.get(User, match.locked_by_user_id)
-        locked_name = locked_by.username if locked_by else "another user"
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Match is locked by {locked_name}",
-        )
+    await ensure_lock_owner(session, match, user)
 
     match.locked_by_user_id = None
     match.locked_at = None

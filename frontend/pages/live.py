@@ -1,13 +1,14 @@
 from asyncio import events
 import logging
 
-from nicegui import app, ui, events
+from nicegui import ui, events
 
 from backend.schema import ActionType
-from frontend.api import api_get, api_post, api_put
+from frontend.api import api_post
 from frontend.layout import apply_layout
+from frontend.pages.live_controller import get_live_controller
 
-from typing import Dict, List, Optional
+from typing import List
 
 logger = logging.getLogger('uvicorn.error')
 
@@ -71,86 +72,19 @@ class ActionButton(ui.button):
         super().update()
 
 
-class LiveState:
-    """
-    Represents the state of the live match.
-    """
-
-    def __init__(self):
-        self.players: List = []
-
-        # Current Selections
-        self.selected_team_id: Optional[int] = None
-        self.selected_match_id: Optional[int] = None
-        self.selected_match_data: Optional[Dict] = None  # Full match data including is_finalized
-        self.selected_player_id: Optional[int] = None
-        self.locked_match_id: Optional[int] = None
-
-        # Game Data
-        self.actions: List = []
-        self.active_player_ids: set = set()
-
-        # Clock State
-        self.clock_running: bool = False
-        self.clock_seconds: int = 0
-        self.period: int = 1
-        self.period_minutes: int = 25
-        self.total_periods: int = 2
-        self.remaining_seconds: int = 25 * 60
-        self.timer = None
-
-        self.player_seconds: dict[int, int] = {}  # Current session playtime
-        self.saved_player_seconds: dict[int, int] = {}  # Saved playtime from database
-
-        self.current_action = None
-        self.x: float = None
-        self.y: float = None
-        
-        # Auto-save timer
-        self.playtime_save_timer = None
-        self.clock_display = None
-
-    @property
-    def formatted_time(self):
-        mins, secs = divmod(self.clock_seconds, 60)
-        return f"{mins:02d}:{secs:02d}"
-
-    @property
-    def formatted_remaining_time(self):
-        mins, secs = divmod(max(0, self.remaining_seconds), 60)
-        return f"{mins:02d}:{secs:02d}"
-    
-    def formatted_player_time(self, player_id):
-        # Show total time (saved + current session)
-        saved_secs = self.saved_player_seconds.get(player_id, 0)
-        current_secs = self.player_seconds.get(player_id, 0)
-        total_secs = saved_secs + current_secs
-        m, s = divmod(total_secs, 60)
-        return f'{m:02d}:{s:02d}'
-    
-    @property
-    def is_match_finalized(self):
-        return self.selected_match_data and self.selected_match_data.get("is_finalized", False)
-
-def get_state() -> LiveState:
-    client = ui.context.client
-    if not hasattr(client, "live_state"):
-        client.live_state = LiveState()
-    return client.live_state
-
-
 @ui.page('/live')
 def live_page():
 
     def content():
-        state = get_state()
+        controller = get_live_controller()
+        state = controller.state
 
         # ---------------------------------------------------------------
         # HELPERS
         # ---------------------------------------------------------------
 
         async def load_teams():
-            teams = await api_get("/teams")
+            teams = await controller.load_teams()
             team_select.set_options({t["id"]: t["name"] for t in teams})
 
             # keep selected team if possible
@@ -161,10 +95,7 @@ def live_page():
             """
             Load matches. If team_id is given: filter only that team's matches.
             """
-            if team_id:
-                matches = await api_get(f"/teams/{team_id}/matches")
-            else:
-                matches = await api_get("/matches")
+            matches = await controller.load_matches(team_id)
 
             match_select.set_options({
                 m["id"]: f'{m.get("date", "")[:10]} — {m.get("opponent_name", "")} ({m["team"]["name"]})'
@@ -175,93 +106,28 @@ def live_page():
             match_select.value = None
 
         async def load_team_players(team_id: int):
-            try:
-                return await api_get(f"/teams/{team_id}/players")
-            except Exception:
-                return []
+            return await controller.load_team_players(team_id)
         
         async def load_match_data(match_id: int):
             """Load full match data including finalized status"""
-            try:
-                match_data = await api_get(f"/matches/{match_id}")
-                state.selected_match_data = match_data
-                state.period = match_data.get("current_period", state.period)
-                return match_data
-            except Exception as e:
-                logger.error(f"Failed to load match data: {e}")
-                return None
+            return await controller.load_match_data(match_id)
         
         async def load_playtime_data(match_id: int):
             """Load saved playtime data from database"""
-            try:
-                playtime_data = await api_get(f"/playtime/{match_id}")
-                # Update saved playtimes
-                state.saved_player_seconds = {
-                    pp["player_id"]: pp["time_played"]
-                    for pp in playtime_data.get("player_playtimes", [])
-                }
-                # Update clock with saved match time
-                state.clock_seconds = playtime_data.get("match_time_registered_s", 0)
-                period_seconds = max(1, state.period_minutes * 60)
-                elapsed_in_period = state.clock_seconds % period_seconds
-                state.remaining_seconds = max(0, period_seconds - elapsed_in_period)
-                logger.info(f"Loaded playtime data: {state.saved_player_seconds}")
-                return playtime_data
-            except Exception as e:
-                logger.error(f"Failed to load playtime data: {e}")
-                # Initialize empty if no playtime data exists
-                state.saved_player_seconds = {}
-                return None
+            return await controller.load_playtime_data(match_id)
         
         async def save_playtime_data():
             """Save current playtime data to database"""
-            if not state.selected_match_id or state.is_match_finalized:
-                return
-            
-            try:
-                # Combine saved and current session times
-                total_player_times = {}
-                for player_id in set(list(state.saved_player_seconds.keys()) + list(state.player_seconds.keys())):
-                    saved = state.saved_player_seconds.get(player_id, 0)
-                    current = state.player_seconds.get(player_id, 0)
-                    total_player_times[player_id] = saved + current
-                
-                time_update = {
-                    "match_time_registered_s": state.clock_seconds,
-                    "player_time_registered_s": total_player_times,
-                    "current_period": state.period,
-                }
-                
-                await api_put(f"/playtime/{state.selected_match_id}", time_update)
-                logger.info(f"Saved playtime data: {time_update}")
-                
-                # Update saved times to include current session
-                state.saved_player_seconds = total_player_times
-                # Reset current session times
-                state.player_seconds = {}
-                
-            except Exception as e:
-                logger.error(f"Failed to save playtime data: {e}")
+            await controller.save_playtime_data()
 
         async def lock_match(match_id: int) -> bool:
-            try:
-                await api_post(f"/matches/{match_id}/lock", {})
-                state.locked_match_id = match_id
-                app.storage.user["locked_match_id"] = match_id
-                return True
-            except Exception as e:
-                detail = str(e)
-                if e.args and isinstance(e.args[0], dict):
-                    detail = e.args[0].get("detail", detail)
+            success, detail = await controller.lock_match(match_id)
+            if not success:
                 ui.notify(f"Match is locked: {detail}", type="warning")
-                return False
+            return success
 
         async def unlock_match(match_id: int) -> None:
-            try:
-                await api_post(f"/matches/{match_id}/unlock", {})
-            except Exception:
-                return
-            app.storage.user.pop("locked_match_id", None)
+            await controller.unlock_match(match_id)
         
         async def finalize_match():
             """Finalize the current match"""
@@ -271,13 +137,10 @@ def live_page():
                 ui.notify("Pause the clock before finalizing the match", type="warning")
                 return
             
-            # Save playtime before finalizing
-            await save_playtime_data()
-            
             try:
-                # Finalize endpoint doesn't need a body, but api_post expects json
-                match_data = await api_post(f"/matches/{state.selected_match_id}/finalize", {})
-                state.selected_match_data = match_data
+                match_data = await controller.finalize_match()
+                if not match_data:
+                    return
                 state.clock_running = False
                 logger.info(f"Match {state.selected_match_id} finalized")
                 if state.locked_match_id:
@@ -312,11 +175,10 @@ def live_page():
                     if state.clock_running:
                         ui.notify("Pause the clock before changing settings", type="warning")
                         return
-                    state.period_minutes = int(minutes_input.value)
-                    state.total_periods = int(halves_input.value)
-                    state.period = 1
-                    state.clock_seconds = 0
-                    state.remaining_seconds = state.period_minutes * 60
+                    controller.apply_match_settings(
+                        int(minutes_input.value),
+                        int(halves_input.value),
+                    )
                     clock_area.refresh()
                     set_time_dialog.close()
 
@@ -326,47 +188,24 @@ def live_page():
             if state.is_match_finalized:
                 ui.notify("Cannot modify clock for a finalized match", type="warning")
                 return
-            if state.remaining_seconds <= 0:
+            if not controller.toggle_clock():
                 ui.notify("Reset the clock before starting", type="warning")
                 return
-            state.clock_running = not state.clock_running
             clock_area.refresh()
 
         def tick():
-            if state.clock_running and state.remaining_seconds > 0:
-                state.remaining_seconds -= 1
-                state.clock_seconds += 1
-                # Update the visual clock
-                if state.clock_display:
-                    state.clock_display.text = state.formatted_remaining_time
-
-                # per-player clocks
-                for pid in state.active_player_ids:
-                    state.player_seconds[pid] = state.player_seconds.get(pid, 0) + 1
-
-                # Update player playtime display (only if players are loaded)
-                if state.players:
-                    render_players(state.players)
-
-                if state.remaining_seconds == 0:
-                    state.clock_running = False
-                    if state.period < state.total_periods:
-                        state.period += 1
-                        state.remaining_seconds = state.period_minutes * 60
-                        ui.notify("Half ended. Ready for next half.", type="warning")
-                    else:
-                        ui.notify("Match time ended.", type="warning")
-                    clock_area.refresh()
+            controller.tick(
+                render_players,
+                lambda message: ui.notify(message, type="warning"),
+                clock_area.refresh,
+            )
 
 
         def reset_clock():
             if state.is_match_finalized:
                 ui.notify("Cannot reset clock for a finalized match", type="warning")
                 return
-            state.clock_running = False
-            state.clock_seconds = 0
-            state.period = 1
-            state.remaining_seconds = state.period_minutes * 60
+            controller.reset_clock()
             clock_area.refresh()
 
         def set_clock_dialog():
@@ -376,7 +215,7 @@ def live_page():
             set_time_dialog.open()
         
         # create the timer
-        state.timer = ui.timer(1.0, tick)
+        controller.ensure_timer(tick)
 
 
         # ---------------------------------------------------------------

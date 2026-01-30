@@ -11,6 +11,7 @@ from backend.auth import get_current_user
 from backend.db import get_session
 from backend.schema import PlaytimeForMatch, PlayerPlaytime, PlayerRead, MatchRead, TimeUpdate
 from backend.models import Match, Player, MatchPlayerLink, User
+from backend.services.match_service import ensure_lock_owner, ensure_not_finalized
 
 from logging import getLogger
 
@@ -74,17 +75,14 @@ async def update_playtime_for_match(
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
     
-    if match.is_finalized:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot update playtime for a finalized match"
-        )
-    if match.locked_by_user_id and match.locked_by_user_id != user.id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Match is locked by another user")
+    ensure_not_finalized(match, "Cannot update playtime for a finalized match")
+    await ensure_lock_owner(session, match, user)
     
     # Update match time
     match.time_registered_s = time_update.match_time_registered_s
     match.current_period = time_update.current_period
+    match.period_minutes = time_update.period_minutes
+    match.total_periods = time_update.total_periods
     
     # Update or create player playtimes
     for player_id, time_played in time_update.player_time_registered_s.items():
