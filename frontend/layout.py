@@ -14,12 +14,10 @@ def apply_layout(content):
 
 
     async def handle_logout():
-        locked_match_id = app.storage.user.get("locked_match_id")
-        if locked_match_id:
-            try:
-                await api_post(f"/matches/{locked_match_id}/unlock", {})
-            except Exception:
-                pass
+        try:
+            await api_post("/matches/unlock_all", {})
+        except Exception:
+            pass
         app.storage.user.clear()
         ui.navigate.to("/login")
 
@@ -61,6 +59,15 @@ def apply_layout(content):
             confirm_password = ui.input("Confirm new password", password=True, password_toggle_button=True)
             ui.button("Update password", on_click=submit_password_change)
 
+    async def toggle_fullscreen():
+        await ui.run_javascript("""
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                document.documentElement.requestFullscreen();
+            }
+        """)
+
     with ui.header().classes(replace='row items-center').style('height: 50px;'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
         ui.label("Ganda Korfball Statistics").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
@@ -68,6 +75,7 @@ def apply_layout(content):
             with ui.menu():
                 ui.menu_item("Change password", on_click=lambda: password_dialog.open())
                 ui.menu_item("Logout", on_click=handle_logout)
+        ui.button(icon="fullscreen", on_click=toggle_fullscreen).props('flat color=white').classes('ml-2')
 
     with left_drawer:
         with ui.row().classes('justify-end'):
