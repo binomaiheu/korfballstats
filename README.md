@@ -56,6 +56,10 @@ The following environment variables are used for authentication and storage:
 
 When a user opens a match in the live view, it is locked so only that user can enter actions and update playtime. Locks are released when switching matches/teams or after finalizing.
 
+### Match clock settings
+
+Minutes per half and the number of halves are stored with the match. This keeps the countdown and current half consistent across users and sessions.
+
 ### Traceability
 
 Actions are stored with the user who submitted them, so match statistics can be traced back to the user.

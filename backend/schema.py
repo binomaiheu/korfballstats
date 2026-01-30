@@ -13,6 +13,7 @@ class ActionType(str, Enum):
     REBOUND = "rebound"
     ASSIST = "assist"
     STEAL = "steal"
+    OPPONENT_GOAL = "opponent_goal"
 
 class SexType(str, Enum):
     MALE = "male"
@@ -71,6 +72,8 @@ class MatchCreate(BaseModel):
     opponent_name: str
     location: Optional[str] = None
     match_type: Optional[MatchType] = MatchType.NORMAL
+    period_minutes: Optional[int] = 25
+    total_periods: Optional[int] = 2
     # match time and finalized should not be set at creation
 
 
@@ -83,6 +86,8 @@ class MatchRead(BaseModel):
     match_type: Optional[MatchType] = MatchType.NORMAL
     time_registered_s: int
     current_period: int = 1
+    period_minutes: int = 25
+    total_periods: int = 2
     is_finalized: bool
     locked_by_user_id: Optional[int] = None
     locked_at: Optional[datetime] = None
@@ -94,7 +99,7 @@ class MatchRead(BaseModel):
 # -- Event models
 class Action(BaseModel):
     match_id: int
-    player_id: int
+    player_id: Optional[int] = None
 
     timestamp: int
     x: Optional[float] = None
@@ -103,6 +108,7 @@ class Action(BaseModel):
     action: ActionType
     result: Optional[bool] = False
     user_id: Optional[int] = None
+    is_opponent: bool = False
 
 class ActionCreate(Action):
     pass
@@ -133,6 +139,8 @@ class TimeUpdate(BaseModel):
     match_time_registered_s: int
     player_time_registered_s: dict[int, int]  # player_id -> time_played
     current_period: int
+    period_minutes: int
+    total_periods: int
 
 
 class UserRead(BaseModel):

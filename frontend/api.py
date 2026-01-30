@@ -11,48 +11,43 @@ def _auth_headers() -> dict:
     return {}
 
 
-async def api_get(path: str):
+async def _request(method: str, path: str, payload: dict | None = None, auth: bool = True):
+    headers = _auth_headers() if auth else {}
     async with aiohttp.ClientSession() as s:
-        async with s.get(f"{BASE_URL}{path}", headers=_auth_headers()) as r:
-            data = await r.json()
+        async with s.request(method, f"{BASE_URL}{path}", json=payload, headers=headers) as r:
+            data = None
+            try:
+                data = await r.json()
+            except Exception:
+                data = await r.text()
             if r.status >= 400:
+                if isinstance(data, dict) and "detail" in data:
+                    raise Exception(data["detail"])
                 raise Exception(data)
             return data
+
+
+async def api_get(path: str):
+    return await _request("GET", path)
 
 
 async def api_post(path: str, payload: dict):
-    async with aiohttp.ClientSession() as s:
-        async with s.post(f"{BASE_URL}{path}", json=payload, headers=_auth_headers()) as r:
-            data = await r.json()
-            if r.status >= 400:
-                raise Exception(data)
-            return data
+    return await _request("POST", path, payload)
         
 async def api_delete(path: str):
-    async with aiohttp.ClientSession() as s:
-        async with s.delete(f"{BASE_URL}{path}", headers=_auth_headers()) as r:
-            if r.status != 204:
-                raise Exception(f"Failed to delete resource at {path}, status code: {r.status}")
+    await _request("DELETE", path)
             
 async def api_put(path: str, payload: dict):
-    async with aiohttp.ClientSession() as s:
-        async with s.put(f"{BASE_URL}{path}", json=payload, headers=_auth_headers()) as r:
-            data = await r.json()
-            if r.status >= 400:
-                raise Exception(data)
-            return data
+    return await _request("PUT", path, payload)
 
 
 async def api_login(username: str, password: str):
-    async with aiohttp.ClientSession() as s:
-        async with s.post(
-            f"{BASE_URL}/auth/login",
-            json={"username": username, "password": password},
-        ) as r:
-            data = await r.json()
-            if r.status >= 400:
-                raise Exception(data)
-            return data
+    return await _request(
+        "POST",
+        "/auth/login",
+        {"username": username, "password": password},
+        auth=False,
+    )
 
 
 async def api_change_password(current_password: str, new_password: str):

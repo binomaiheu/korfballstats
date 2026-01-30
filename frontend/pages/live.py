@@ -1,13 +1,14 @@
 from asyncio import events
 import logging
 
-from nicegui import app, ui, events
+from nicegui import ui, events
 
 from backend.schema import ActionType
-from frontend.api import api_get, api_post, api_put
+from frontend.api import api_post
 from frontend.layout import apply_layout
+from frontend.pages.live_controller import get_live_controller
 
-from typing import Dict, List, Optional
+from typing import List
 
 logger = logging.getLogger('uvicorn.error')
 
@@ -71,86 +72,19 @@ class ActionButton(ui.button):
         super().update()
 
 
-class LiveState:
-    """
-    Represents the state of the live match.
-    """
-
-    def __init__(self):
-        self.players: List = []
-
-        # Current Selections
-        self.selected_team_id: Optional[int] = None
-        self.selected_match_id: Optional[int] = None
-        self.selected_match_data: Optional[Dict] = None  # Full match data including is_finalized
-        self.selected_player_id: Optional[int] = None
-        self.locked_match_id: Optional[int] = None
-
-        # Game Data
-        self.actions: List = []
-        self.active_player_ids: set = set()
-
-        # Clock State
-        self.clock_running: bool = False
-        self.clock_seconds: int = 0
-        self.period: int = 1
-        self.period_minutes: int = 25
-        self.total_periods: int = 2
-        self.remaining_seconds: int = 25 * 60
-        self.timer = None
-
-        self.player_seconds: dict[int, int] = {}  # Current session playtime
-        self.saved_player_seconds: dict[int, int] = {}  # Saved playtime from database
-
-        self.current_action = None
-        self.x: float = None
-        self.y: float = None
-        
-        # Auto-save timer
-        self.playtime_save_timer = None
-        self.clock_display = None
-
-    @property
-    def formatted_time(self):
-        mins, secs = divmod(self.clock_seconds, 60)
-        return f"{mins:02d}:{secs:02d}"
-
-    @property
-    def formatted_remaining_time(self):
-        mins, secs = divmod(max(0, self.remaining_seconds), 60)
-        return f"{mins:02d}:{secs:02d}"
-    
-    def formatted_player_time(self, player_id):
-        # Show total time (saved + current session)
-        saved_secs = self.saved_player_seconds.get(player_id, 0)
-        current_secs = self.player_seconds.get(player_id, 0)
-        total_secs = saved_secs + current_secs
-        m, s = divmod(total_secs, 60)
-        return f'{m:02d}:{s:02d}'
-    
-    @property
-    def is_match_finalized(self):
-        return self.selected_match_data and self.selected_match_data.get("is_finalized", False)
-
-def get_state() -> LiveState:
-    client = ui.context.client
-    if not hasattr(client, "live_state"):
-        client.live_state = LiveState()
-    return client.live_state
-
-
 @ui.page('/live')
 def live_page():
 
     def content():
-        state = get_state()
+        controller = get_live_controller()
+        state = controller.state
 
         # ---------------------------------------------------------------
         # HELPERS
         # ---------------------------------------------------------------
 
         async def load_teams():
-            teams = await api_get("/teams")
+            teams = await controller.load_teams()
             team_select.set_options({t["id"]: t["name"] for t in teams})
 
             # keep selected team if possible
@@ -161,10 +95,7 @@ def live_page():
             """
             Load matches. If team_id is given: filter only that team's matches.
             """
-            if team_id:
-                matches = await api_get(f"/teams/{team_id}/matches")
-            else:
-                matches = await api_get("/matches")
+            matches = await controller.load_matches(team_id)
 
             match_select.set_options({
                 m["id"]: f'{m.get("date", "")[:10]} — {m.get("opponent_name", "")} ({m["team"]["name"]})'
@@ -175,93 +106,28 @@ def live_page():
             match_select.value = None
 
         async def load_team_players(team_id: int):
-            try:
-                return await api_get(f"/teams/{team_id}/players")
-            except Exception:
-                return []
+            return await controller.load_team_players(team_id)
         
         async def load_match_data(match_id: int):
             """Load full match data including finalized status"""
-            try:
-                match_data = await api_get(f"/matches/{match_id}")
-                state.selected_match_data = match_data
-                state.period = match_data.get("current_period", state.period)
-                return match_data
-            except Exception as e:
-                logger.error(f"Failed to load match data: {e}")
-                return None
+            return await controller.load_match_data(match_id)
         
         async def load_playtime_data(match_id: int):
             """Load saved playtime data from database"""
-            try:
-                playtime_data = await api_get(f"/playtime/{match_id}")
-                # Update saved playtimes
-                state.saved_player_seconds = {
-                    pp["player_id"]: pp["time_played"]
-                    for pp in playtime_data.get("player_playtimes", [])
-                }
-                # Update clock with saved match time
-                state.clock_seconds = playtime_data.get("match_time_registered_s", 0)
-                period_seconds = max(1, state.period_minutes * 60)
-                elapsed_in_period = state.clock_seconds % period_seconds
-                state.remaining_seconds = max(0, period_seconds - elapsed_in_period)
-                logger.info(f"Loaded playtime data: {state.saved_player_seconds}")
-                return playtime_data
-            except Exception as e:
-                logger.error(f"Failed to load playtime data: {e}")
-                # Initialize empty if no playtime data exists
-                state.saved_player_seconds = {}
-                return None
+            return await controller.load_playtime_data(match_id)
         
         async def save_playtime_data():
             """Save current playtime data to database"""
-            if not state.selected_match_id or state.is_match_finalized:
-                return
-            
-            try:
-                # Combine saved and current session times
-                total_player_times = {}
-                for player_id in set(list(state.saved_player_seconds.keys()) + list(state.player_seconds.keys())):
-                    saved = state.saved_player_seconds.get(player_id, 0)
-                    current = state.player_seconds.get(player_id, 0)
-                    total_player_times[player_id] = saved + current
-                
-                time_update = {
-                    "match_time_registered_s": state.clock_seconds,
-                    "player_time_registered_s": total_player_times,
-                    "current_period": state.period,
-                }
-                
-                await api_put(f"/playtime/{state.selected_match_id}", time_update)
-                logger.info(f"Saved playtime data: {time_update}")
-                
-                # Update saved times to include current session
-                state.saved_player_seconds = total_player_times
-                # Reset current session times
-                state.player_seconds = {}
-                
-            except Exception as e:
-                logger.error(f"Failed to save playtime data: {e}")
+            await controller.save_playtime_data()
 
         async def lock_match(match_id: int) -> bool:
-            try:
-                await api_post(f"/matches/{match_id}/lock", {})
-                state.locked_match_id = match_id
-                app.storage.user["locked_match_id"] = match_id
-                return True
-            except Exception as e:
-                detail = str(e)
-                if e.args and isinstance(e.args[0], dict):
-                    detail = e.args[0].get("detail", detail)
+            success, detail = await controller.lock_match(match_id)
+            if not success:
                 ui.notify(f"Match is locked: {detail}", type="warning")
-                return False
+            return success
 
         async def unlock_match(match_id: int) -> None:
-            try:
-                await api_post(f"/matches/{match_id}/unlock", {})
-            except Exception:
-                return
-            app.storage.user.pop("locked_match_id", None)
+            await controller.unlock_match(match_id)
         
         async def finalize_match():
             """Finalize the current match"""
@@ -271,13 +137,10 @@ def live_page():
                 ui.notify("Pause the clock before finalizing the match", type="warning")
                 return
             
-            # Save playtime before finalizing
-            await save_playtime_data()
-            
             try:
-                # Finalize endpoint doesn't need a body, but api_post expects json
-                match_data = await api_post(f"/matches/{state.selected_match_id}/finalize", {})
-                state.selected_match_data = match_data
+                match_data = await controller.finalize_match()
+                if not match_data:
+                    return
                 state.clock_running = False
                 logger.info(f"Match {state.selected_match_id} finalized")
                 if state.locked_match_id:
@@ -286,7 +149,6 @@ def live_page():
                 
                 # Refresh UI to show finalized state
                 clock_area.refresh()
-                finalize_button_area.refresh()
                 render_actions()
                 render_players(state.players)
                 
@@ -312,11 +174,10 @@ def live_page():
                     if state.clock_running:
                         ui.notify("Pause the clock before changing settings", type="warning")
                         return
-                    state.period_minutes = int(minutes_input.value)
-                    state.total_periods = int(halves_input.value)
-                    state.period = 1
-                    state.clock_seconds = 0
-                    state.remaining_seconds = state.period_minutes * 60
+                    controller.apply_match_settings(
+                        int(minutes_input.value),
+                        int(halves_input.value),
+                    )
                     clock_area.refresh()
                     set_time_dialog.close()
 
@@ -326,47 +187,24 @@ def live_page():
             if state.is_match_finalized:
                 ui.notify("Cannot modify clock for a finalized match", type="warning")
                 return
-            if state.remaining_seconds <= 0:
+            if not controller.toggle_clock():
                 ui.notify("Reset the clock before starting", type="warning")
                 return
-            state.clock_running = not state.clock_running
             clock_area.refresh()
 
         def tick():
-            if state.clock_running and state.remaining_seconds > 0:
-                state.remaining_seconds -= 1
-                state.clock_seconds += 1
-                # Update the visual clock
-                if state.clock_display:
-                    state.clock_display.text = state.formatted_remaining_time
-
-                # per-player clocks
-                for pid in state.active_player_ids:
-                    state.player_seconds[pid] = state.player_seconds.get(pid, 0) + 1
-
-                # Update player playtime display (only if players are loaded)
-                if state.players:
-                    render_players(state.players)
-
-                if state.remaining_seconds == 0:
-                    state.clock_running = False
-                    if state.period < state.total_periods:
-                        state.period += 1
-                        state.remaining_seconds = state.period_minutes * 60
-                        ui.notify("Half ended. Ready for next half.", type="warning")
-                    else:
-                        ui.notify("Match time ended.", type="warning")
-                    clock_area.refresh()
+            controller.tick(
+                update_player_time_labels,
+                lambda message: ui.notify(message, type="warning"),
+                clock_area.refresh,
+            )
 
 
         def reset_clock():
             if state.is_match_finalized:
                 ui.notify("Cannot reset clock for a finalized match", type="warning")
                 return
-            state.clock_running = False
-            state.clock_seconds = 0
-            state.period = 1
-            state.remaining_seconds = state.period_minutes * 60
+            controller.reset_clock()
             clock_area.refresh()
 
         def set_clock_dialog():
@@ -376,7 +214,7 @@ def live_page():
             set_time_dialog.open()
         
         # create the timer
-        state.timer = ui.timer(1.0, tick)
+        controller.ensure_timer(tick)
 
 
         # ---------------------------------------------------------------
@@ -419,6 +257,7 @@ def live_page():
             render_actions()
             render_players(state.players)
             ii.content = ""  # Clear the playfield indicator
+            await refresh_actions_table()
 
 
         async def on_team_change(team_id):
@@ -442,7 +281,7 @@ def live_page():
             if state.locked_match_id:
                 await unlock_match(state.locked_match_id)
                 state.locked_match_id = None
-            finalize_button_area.refresh()
+            clock_area.refresh()
 
 
         async def on_match_change(match_id):
@@ -466,13 +305,15 @@ def live_page():
                 state.clock_seconds = 0
                 state.period = 1
                 state.remaining_seconds = state.period_minutes * 60
+                state.team_score = 0
+                state.opponent_score = 0
                 clock_area.refresh()
-                finalize_button_area.refresh()
+                await refresh_actions_table()
                 return
             
             # Load match data (including finalized status)
             await load_match_data(match_id)
-            finalize_button_area.refresh()
+            clock_area.refresh()
 
             if state.is_match_finalized:
                 state.clock_running = False
@@ -499,7 +340,7 @@ def live_page():
             render_actions()
             render_players(state.players)
             clock_area.refresh()
-            finalize_button_area.refresh()
+            await refresh_actions_table()
             
             # Start auto-save timer (save every 30 seconds)
             if state.playtime_save_timer:
@@ -526,7 +367,14 @@ def live_page():
             # Re-render actions (lightweight refresh)
             render_actions()
 
-
+        def update_player_time_labels():
+            if not state.players:
+                return
+            labels = getattr(state, "player_time_labels", {})
+            if not labels:
+                return
+            for pid, label in labels.items():
+                label.text = state.formatted_player_time(pid)
 
         # simple handler for clicking a player button (when enabled)
         def on_player_button_click(player_id):
@@ -573,6 +421,8 @@ def live_page():
 
             with action_column:
                 for action_type in ActionType:
+                    if action_type == ActionType.OPPONENT_GOAL:
+                        continue
                     act_btn = ActionButton(
                         action_type,
                         action_type == state.current_action,
@@ -584,6 +434,7 @@ def live_page():
 
         def render_players(players):
             players_column.clear()
+            state.player_time_labels = {}
  
             with players_column:
                 with ui.grid(columns=2).classes("gap-4"):
@@ -615,7 +466,8 @@ def live_page():
                             if state.is_match_finalized:
                                 player_switch.disable()
 
-                            ui.label(state.formatted_player_time(player_id)).classes("text-xs text-grey-6")
+                            time_label = ui.label(state.formatted_player_time(player_id)).classes("text-xs text-grey-6")
+                            state.player_time_labels[player_id] = time_label
 
                     female_players = [p for p in players if p.get("sex") == "female"]
                     male_players = [p for p in players if p.get("sex") == "male"]
@@ -627,6 +479,150 @@ def live_page():
                     with ui.column().classes("gap-2"):
                         for p in sorted(male_players, key=player_sort_key):
                             render_player_card(p)
+
+        def update_scores_from_actions(actions):
+            team_score = 0
+            opponent_score = 0
+            goal_actions = {
+                ActionType.SHOT,
+                ActionType.KORTE_KANS,
+                ActionType.VRIJWORP,
+                ActionType.STRAFWORP,
+                ActionType.INLOPER,
+            }
+            for action in actions:
+                if action.get("is_opponent"):
+                    opponent_score += 1
+                elif action.get("result") and action.get("action") in {a.value for a in goal_actions}:
+                    team_score += 1
+            state.team_score = team_score
+            state.opponent_score = opponent_score
+            clock_area.refresh()
+
+        async def refresh_actions_table():
+            if not state.selected_match_id:
+                actions_table.rows = []
+                actions_table.update()
+                return
+            actions = await controller.load_match_actions(state.selected_match_id)
+            players_by_id = {p["id"]: p for p in state.players}
+
+            def format_time(seconds: int) -> str:
+                mins, secs = divmod(seconds, 60)
+                return f"{mins:02d}:{secs:02d}"
+
+            rows = []
+            for action in sorted(actions, key=lambda a: (a.get("timestamp", 0), a.get("id", 0)), reverse=True):
+                player = players_by_id.get(action.get("player_id"))
+                player_name = "Opponent" if action.get("is_opponent") else (
+                    f'{player.get("first_name", "")} {player.get("last_name", "")}'.strip() if player else str(action.get("player_id"))
+                )
+                action_label = (action.get("action") or "").replace("_", " ").title()
+                result_label = "Score" if action.get("result") else "Miss"
+                x_val = action.get("x")
+                y_val = action.get("y")
+                x_fmt = round(x_val, 1) if isinstance(x_val, (int, float)) else x_val
+                y_fmt = round(y_val, 1) if isinstance(y_val, (int, float)) else y_val
+                rows.append({
+                    "id": action.get("id"),
+                    "action": action_label,
+                    "player_name": player_name,
+                    "timestamp": format_time(action.get("timestamp", 0)),
+                    "period": action.get("period"),
+                    "x": x_fmt,
+                    "y": y_fmt,
+                    "result": result_label,
+                    "_raw": action,
+                })
+            update_scores_from_actions(actions)
+            actions_table.rows = rows
+            actions_table.update()
+
+        def open_edit_action_dialog(e):
+            if state.is_match_finalized:
+                ui.notify("Cannot edit actions for a finalized match", type="warning")
+                return
+
+            row = e.args
+            raw = row.get("_raw", {})
+            with ui.dialog() as dialog:
+                with ui.card():
+                    ui.label("Edit action").classes("text-lg font-bold")
+                    action_select = ui.select(
+                        {a.value: a.name.replace("_", " ").title() for a in ActionType},
+                        value=raw.get("action"),
+                        label="Action type",
+                    )
+                    player_select = ui.select(
+                        {0: "Opponent", **{p["id"]: f'{p.get("first_name", "")} {p.get("last_name", "")}' for p in state.players}},
+                        value=raw.get("player_id") or 0,
+                        label="Player",
+                    )
+                    time_input = ui.number(label="Time (seconds)", value=raw.get("timestamp", 0), min=0)
+                    period_input = ui.number(label="Half", value=raw.get("period", 1), min=1)
+                    x_input = ui.number(label="X coordinate", value=raw.get("x"))
+                    y_input = ui.number(label="Y coordinate", value=raw.get("y"))
+                    result_toggle = ui.switch("Score", value=bool(raw.get("result")))
+                    is_opponent_toggle = ui.switch("Opponent goal", value=bool(raw.get("is_opponent")))
+
+                    async def save():
+                        is_opponent = bool(is_opponent_toggle.value)
+                        player_id = None if is_opponent or player_select.value == 0 else player_select.value
+                        payload = {
+                            "match_id": state.selected_match_id,
+                            "player_id": player_id,
+                            "timestamp": int(time_input.value or 0),
+                            "x": x_input.value,
+                            "y": y_input.value,
+                            "period": int(period_input.value or 1),
+                            "action": action_select.value,
+                            "result": bool(result_toggle.value),
+                            "is_opponent": is_opponent,
+                        }
+                        try:
+                            await controller.update_action(raw.get("id"), payload)
+                            dialog.close()
+                            await refresh_actions_table()
+                        except Exception as exc:
+                            ui.notify(f"Failed to update action: {exc}", type="negative")
+
+                    ui.button("Save", on_click=save)
+
+        async def delete_action(e):
+            if state.is_match_finalized:
+                ui.notify("Cannot delete actions for a finalized match", type="warning")
+                return
+            row = e.args
+            raw = row.get("_raw", {})
+            try:
+                await controller.delete_action(raw.get("id"))
+                await refresh_actions_table()
+            except Exception as exc:
+                ui.notify(f"Failed to delete action: {exc}", type="negative")
+
+        async def register_opponent_goal():
+            if state.is_match_finalized:
+                ui.notify("Cannot add actions to a finalized match", type="warning")
+                return
+            if not state.selected_match_id:
+                return
+            action_data = {
+                "match_id": state.selected_match_id,
+                "player_id": None,
+                "timestamp": state.clock_seconds,
+                "x": None,
+                "y": None,
+                "period": state.period,
+                "action": ActionType.OPPONENT_GOAL,
+                "result": True,
+                "is_opponent": True,
+            }
+            try:
+                await api_post("/actions", action_data)
+            except Exception as exc:
+                ui.notify(f"Failed to add opponent goal: {exc}", type="negative")
+                return
+            await refresh_actions_table()
 
         # ---------------------------------------------------------
         # UI COMPONENTS (REFRESHABLE)
@@ -669,16 +665,37 @@ def live_page():
                     
                     if state.is_match_finalized:
                         clock_button.disable()
+                    team_score = getattr(state, "team_score", 0)
+                    opponent_score = getattr(state, "opponent_score", 0)
+                    location = (state.selected_match_data or {}).get("location", "") or ""
+                    is_home = location.strip().lower() == "thuis"
+                    score_text = f"{team_score} - {opponent_score}" if is_home else f"{opponent_score} - {team_score}"
+                    ui.separator().props("vertical").classes("mx-4")
+                    ui.label(score_text).classes("text-4xl font-bold")
+                    opp_button = ui.button("Opp Goal", on_click=register_opponent_goal, color="orange").classes("ml-2")
+                    if state.is_match_finalized:
+                        opp_button.disable()
+                    settings_btn = ui.button(icon="settings", color="grey").props("flat round")
+                    with settings_btn:
+                        with ui.menu():
+                            ui.menu_item("Set Time", on_click=set_clock_dialog)
+                            ui.menu_item("Reset", on_click=reset_clock)
+                            ui.separator()
+                            ui.menu_item("Save Playtime", on_click=lambda: save_playtime_data())
+                            finalize_item = ui.menu_item(
+                                "Finalize Match" if not state.is_match_finalized else "Match Finalized",
+                                on_click=lambda: finalize_match() if (state.selected_match_id and not state.is_match_finalized) else None,
+                            )
+                            if not state.selected_match_id or state.is_match_finalized:
+                                finalize_item.disable()
+                    if state.selected_match_id and not state.is_match_finalized:
+                        ui.button(
+                            "Finalize Match",
+                            on_click=finalize_match,
+                            color="red",
+                            icon="lock",
+                        ).classes("ml-2")
 
-        @ui.refreshable
-        def finalize_button_area():
-            if state.selected_match_id and not state.is_match_finalized:
-                ui.button(
-                    "Finalize Match",
-                    on_click=finalize_match,
-                    color="red",
-                    icon="lock",
-                ).classes("ml-2")
                     
 
         def mouse_handler(e: events.MouseEventArguments):
@@ -713,7 +730,7 @@ def live_page():
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
             ).classes("w-48")  # Make the select wider
-   
+
             with ui.button(icon="settings", color="grey").props("flat round") as settings_btn:
                 with ui.menu():
                     ui.menu_item("Set Time", on_click=set_clock_dialog)
@@ -726,45 +743,85 @@ def live_page():
                     )
                     if not state.selected_match_id or state.is_match_finalized:
                         finalize_item.disable()
-            
-            finalize_button_area()
 
 
         with ui.row():
             clock_area()
 
-        with ui.row().classes("items-start gap-4"):
-            with ui.card():
-                ui.label("Actions").classes("text-xs font-bold text-grey-6")
-                action_column = ui.row().classes("items-center gap-2 flex-wrap")
-            with ui.card():
-                ui.label("Result").classes("text-xs font-bold text-grey-6")
-                with ui.row().classes("items-center gap-2"):
-                    ok_button = ui.button(
-                        "Ok / Score",
-                        on_click=lambda x: submit(True),
-                        icon="thumb_up"
-                    )
-                    if state.is_match_finalized:
-                        ok_button.disable()
-                    miss_button = ui.button(
-                        "Gemist",
-                        on_click=lambda x: submit(False),
-                        icon="thumb_down"
-                    )
-                    if state.is_match_finalized:
-                        miss_button.disable()
+        with ui.tabs().classes("w-full mt-2").props("dense") as tabs:
+            ui.tab("Live")
+            ui.tab("Events")
 
-        with ui.row().classes("items-start gap-4"):
-            src = 'korfball_field.svg'
-            #src = 'korfball.svg'
-            #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
-            with ui.card():
-                ui.label("Playfield").classes("text-xs font-bold text-grey-6")
-                ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
-            with ui.card():
-                ui.label("Players").classes("text-xs font-bold text-grey-6")
-                players_column = ui.column()
+        with ui.tab_panels(tabs, value="Live").classes("w-full"):
+            with ui.tab_panel("Live"):
+
+                with ui.row().classes("items-start gap-4"):
+                    with ui.card():
+                        ui.label("Actions").classes("text-xs font-bold text-grey-6")
+                        action_column = ui.row().classes("items-center gap-2 flex-wrap")
+                    with ui.card():
+                        ui.label("Result").classes("text-xs font-bold text-grey-6")
+                        with ui.row().classes("items-center gap-2"):
+                            ok_button = ui.button(
+                                "Ok / Score",
+                                on_click=lambda x: submit(True),
+                                icon="thumb_up"
+                            )
+                            if state.is_match_finalized:
+                                ok_button.disable()
+                            miss_button = ui.button(
+                                "Gemist",
+                                on_click=lambda x: submit(False),
+                                icon="thumb_down"
+                            )
+                            if state.is_match_finalized:
+                                miss_button.disable()
+
+                with ui.row().classes("items-start gap-4"):
+                    src = 'korfball_field.svg'
+                    #src = 'korfball.svg'
+                    #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
+                    with ui.card():
+                        ui.label("Playfield").classes("text-xs font-bold text-grey-6")
+                        ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
+                    with ui.card():
+                        ui.label("Players").classes("text-xs font-bold text-grey-6")
+                        players_column = ui.column()
+
+            with ui.tab_panel("Events"):
+                with ui.card().classes("w-full"):
+                    with ui.row().classes("items-center justify-between w-full"):
+                        ui.label("Match events").classes("text-xs font-bold text-grey-6")
+                        ui.button("Refresh", on_click=refresh_actions_table).props("flat")
+                    actions_table = ui.table(
+                        columns=[
+                            {'name': 'actions', 'label': 'Actions', 'field': 'id', 'classes': 'auto-width no-wrap'},
+                            {"name": "action", "label": "Action", "field": "action", "align": 'left'},
+                            {"name": "player_name", "label": "Player", "field": "player_name", "align": 'left'},
+                            {"name": "timestamp", "label": "Time", "field": "timestamp", "align": 'right'},
+                            {"name": "period", "label": "Half", "field": "period", "align": 'right'},
+                            {"name": "x", "label": "X", "field": "x", "align": 'right'},
+                            {"name": "y", "label": "Y", "field": "y", "align": 'right'},
+                            {"name": "result", "label": "Result", "field": "result", "align": 'left'},
+                        ],
+                        rows=[],
+                        row_key="id",
+                        column_defaults={'align': 'left', 'headerClasses': 'text-primary'},
+                        pagination={'rowsPerPage': 12},
+                    ).classes("w-full mt-2 q-table--dense")
+                    actions_table.add_slot('body-cell', '''
+                    <q-td :props="props">
+                        <template v-if="props.col.name === 'actions'">
+                            <q-btn flat dense round icon="edit" @click="() => $parent.$emit('edit', props.row)" />
+                            <q-btn flat dense round icon="delete" color="red" @click="() => $parent.$emit('delete', props.row)" />
+                        </template>
+                        <template v-else>
+                            {{ props.value }}
+                        </template>
+                    </q-td>''')
+                    actions_table.on("edit", open_edit_action_dialog)
+                    actions_table.on("delete", delete_action)
+
 
 
 
