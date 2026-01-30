@@ -2,7 +2,7 @@ from nicegui import app, ui
 
 from frontend.api import api_change_password, api_post
 
-def apply_layout(content):
+def apply_layout(content, page_title: str = "Ganda Korfball Statistics"):
     """Wrap a page in the shared layout."""
     if not app.storage.user.get("token"):
         ui.navigate.to("/login")
@@ -70,7 +70,7 @@ def apply_layout(content):
 
     with ui.header().classes(replace='row items-center').style('height: 50px;'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-        ui.label("Ganda Korfball Statistics").style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
+        ui.label(page_title).style('margin-left: 16px; font-weight: bold; font-size: 18px; color: white;')
         with ui.button(app.storage.user.get("username", "unknown")).props('flat color=white').classes('ml-auto') as user_button:
             with ui.menu():
                 ui.menu_item("Change password", on_click=lambda: password_dialog.open())
@@ -81,6 +81,7 @@ def apply_layout(content):
         with ui.row().classes('justify-end'):
             ui.button(icon='close', on_click=left_drawer.toggle).props('flat round dense')
     
+        ui.link('Home', '/home')
         ui.link('Teams', '/teams')
         ui.link('Matches', '/matches')
         ui.link('Live feed', '/live')

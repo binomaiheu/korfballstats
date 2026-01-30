@@ -19,6 +19,7 @@ from frontend.pages.matches import matches_page
 from frontend.pages.live import live_page
 from frontend.pages.analysis import analysis_page
 from frontend.pages.login import login_page
+from frontend.pages.home import home_page
 
 
 @asynccontextmanager
@@ -53,7 +54,7 @@ app.include_router(auth_router, prefix="/api/v1")
 # ------------------------------------------------------------
 @ui.page('/')
 def index():
-    ui.navigate.to('/teams')
+    ui.navigate.to('/home')
 
 # Mount the NiceGUI app onto the FastAPI app
 storage_secret = os.getenv("KORFBALL_STORAGE_SECRET", "dev-storage-secret-change-me")

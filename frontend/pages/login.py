@@ -6,7 +6,7 @@ from frontend.api import api_login
 @ui.page("/login")
 def login_page():
     if app.storage.user.get("token"):
-        ui.navigate.to("/live")
+        ui.navigate.to("/home")
         return
 
     async def handle_login():
@@ -19,7 +19,7 @@ def login_page():
         app.storage.user["token"] = data.get("access_token")
         app.storage.user["username"] = data.get("username")
         ui.notify("Logged in", type="positive")
-        ui.navigate.to("/live")
+        ui.navigate.to("/home")
 
     with ui.column().classes("w-full items-center justify-center mt-12"):
         ui.image("logo_ganda.jpg").classes("w-48")

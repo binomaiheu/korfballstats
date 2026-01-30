@@ -151,7 +151,7 @@ def matches_page():
         # UI LAYOUT
         # ----------------------------------------------------------------------
 
-        ui.markdown("### 🏟️ Matches")
+        # title moved to header
 
         with ui.card().classes('w-full p-4 mb-4'):
 
@@ -200,4 +200,4 @@ def matches_page():
 
 
     # setting layout for this content
-    apply_layout(content)
+    apply_layout(content, page_title="Matches")

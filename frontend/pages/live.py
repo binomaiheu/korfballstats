@@ -714,8 +714,6 @@ def live_page():
         # UI LAYOUT
         # ---------------------------------------------------------------
         ui.context.client.on_disconnect(handle_disconnect)
-        ui.markdown("### 🏷️ Match Actions")
-
         with ui.row().classes("items-center gap-4"):
             team_select = ui.select(
                 {},
@@ -833,4 +831,4 @@ def live_page():
 
         ui.timer(0, refresh_all, once=True)
 
-    apply_layout(content)
+    apply_layout(content, page_title="Match Actions")

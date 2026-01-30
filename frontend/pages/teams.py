@@ -246,7 +246,7 @@ def teams_page():
         # UI LAYOUT
         # ----------------------------------------------------------------------
 
-        ui.markdown("### 🏆 Player and Team Setup")
+        # title moved to header
         ui.markdown("Here you can enter the players in your club and assign them to different teams. The players can be assigned to multiple teams.")
 
         with ui.grid(columns=2).classes('w-full gap-4'):
@@ -372,4 +372,4 @@ def teams_page():
         ui.timer(0.1, refresh_all, once=True)
 
 
-    apply_layout(content)
+    apply_layout(content, page_title="Player and Team Setup")

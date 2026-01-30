@@ -209,7 +209,7 @@ def analysis_page():
         # UI LAYOUT
         # ----------------------------------------------------------------------
 
-        ui.markdown("### 🏷️ Analysis")
+        # title moved to header
 
         with ui.row().classes("items-center gap-4"):
             team_select = ui.select(
@@ -305,4 +305,4 @@ def analysis_page():
 
         ui.timer(0, refresh_all, once=True)
 
-    apply_layout(content)
+    apply_layout(content, page_title="Analysis")
