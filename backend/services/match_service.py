@@ -1,6 +1,6 @@
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from backend.models import Match, User
 
@@ -29,3 +29,11 @@ async def ensure_lock_owner(session: AsyncSession, match: Match, user: User) -> 
             status_code=status.HTTP_409_CONFLICT,
             detail=format_lock_detail(locked_name),
         )
+
+
+async def unlock_all_for_user(session: AsyncSession, user: User) -> None:
+    await session.execute(
+        update(Match)
+        .where(Match.locked_by_user_id == user.id)
+        .values(locked_by_user_id=None, locked_at=None)
+    )

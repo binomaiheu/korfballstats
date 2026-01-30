@@ -14,7 +14,7 @@ from backend.db import get_session
 from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 from backend.schema import ActionRead
 from backend.models import Match, Action, Team, User
-from backend.services.match_service import ensure_lock_owner, ensure_not_finalized, get_match_or_404
+from backend.services.match_service import ensure_lock_owner, ensure_not_finalized, get_match_or_404, unlock_all_for_user
 
 from logging import getLogger
 
@@ -248,4 +248,14 @@ async def unlock_match(
         await session.rollback()
         raise HTTPException(status_code=400, detail="Error unlocking match")
 
+    return {"detail": "ok"}
+
+
+@router.post("/unlock_all", status_code=200)
+async def unlock_all_matches(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    await unlock_all_for_user(session, user)
+    await session.commit()
     return {"detail": "ok"}
