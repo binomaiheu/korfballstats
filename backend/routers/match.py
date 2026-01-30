@@ -14,7 +14,18 @@ from backend.db import get_session
 from backend.schema import MatchCreate, MatchRead, TeamCreate, TeamRead, TeamAssignPlayer, PlayerRead
 from backend.schema import ActionRead
 from backend.models import Match, Action, Team, User
-from backend.services.match_service import ensure_lock_owner, ensure_not_finalized, get_match_or_404, unlock_all_for_user
+from backend.services.match_service import (
+    ensure_lock_owner,
+    ensure_not_finalized,
+    get_match_or_404,
+    unlock_all_for_user,
+    transfer_lock_on_owner_exit,
+)
+from backend.services.collaboration import add_collaborator, add_request, get_requests, pop_request, is_collaborator, list_collaborators
+from backend.services.join_events import notify as notify_join
+from backend.services.join_decision_events import notify as notify_join_decision
+from backend.services.clock_events import notify as notify_clock
+from backend.schema import UserRead
 
 from logging import getLogger
 
@@ -141,14 +152,21 @@ async def get_match_actions(
 
     # Fetch all actions for this match
     stmt = (
-        select(Action)
+        select(Action, User.username)
+        .join(User, User.id == Action.user_id, isouter=True)
         .where(Action.match_id == match_id)
     )
 
     result = await session.execute(stmt)
-    actions = result.scalars().all()
+    rows = result.all()
 
-    return actions
+    output = []
+    for action, username in rows:
+        data = ActionRead.model_validate(action).model_dump()
+        data["username"] = username
+        output.append(data)
+
+    return output
 
 @router.post("/{match_id}/finalize", response_model=MatchRead)
 async def finalize_match(
@@ -213,10 +231,14 @@ async def lock_match(
 
     ensure_not_finalized(match, "Cannot lock a finalized match")
 
-    await ensure_lock_owner(session, match, user)
+    if match.locked_by_user_id and match.locked_by_user_id != user.id:
+        if is_collaborator(match_id, user.id):
+            return {"detail": "collaborator"}
+        return {"detail": "locked"}
 
     match.locked_by_user_id = user.id
     match.locked_at = datetime.now(timezone.utc)
+    add_collaborator(match_id, user.id)
 
     try:
         session.add(match)
@@ -238,16 +260,14 @@ async def unlock_match(
 
     await ensure_lock_owner(session, match, user)
 
-    match.locked_by_user_id = None
-    match.locked_at = None
-
     try:
-        session.add(match)
+        new_owner_id = await transfer_lock_on_owner_exit(session, match, user.id)
         await session.commit()
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status_code=400, detail="Error unlocking match")
 
+    notify_clock(match_id, {"locked_by_user_id": new_owner_id})
     return {"detail": "ok"}
 
 
@@ -256,6 +276,100 @@ async def unlock_all_matches(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    await unlock_all_for_user(session, user)
+    updates = await unlock_all_for_user(session, user)
     await session.commit()
+    for match_id, new_owner_id in updates:
+        notify_clock(match_id, {"locked_by_user_id": new_owner_id})
     return {"detail": "ok"}
+
+
+@router.get("/{match_id}/join_requests")
+async def list_join_requests(
+    match_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    match = await get_match_or_404(session, match_id)
+    await ensure_lock_owner(session, match, user)
+    return [
+        {
+            "match_id": req.match_id,
+            "requester": UserRead(id=req.requester_user_id, username=req.requester_username, is_active=True).model_dump(),
+            "created_at": req.created_at,
+        }
+        for req in get_requests(match_id)
+    ]
+
+
+@router.get("/{match_id}/collaborators")
+async def list_collaborators_for_match(
+    match_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    match = await get_match_or_404(session, match_id)
+    owner_id = match.locked_by_user_id
+    collaborator_ids = list_collaborators(match_id)
+
+    user_ids = set(collaborator_ids)
+    if owner_id:
+        user_ids.add(owner_id)
+
+    usernames: dict[int, str] = {}
+    if user_ids:
+        stmt = select(User).where(User.id.in_(user_ids))
+        result = await session.execute(stmt)
+        for user in result.scalars().all():
+            usernames[user.id] = user.username
+
+    owner = None
+    if owner_id:
+        owner = {"id": owner_id, "username": usernames.get(owner_id)}
+
+    collaborators = [
+        {"id": uid, "username": usernames.get(uid)}
+        for uid in collaborator_ids
+        if uid != owner_id
+    ]
+
+    return {"owner": owner, "collaborators": collaborators}
+
+
+@router.post("/{match_id}/join_request")
+async def request_join(
+    match_id: int,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    match = await get_match_or_404(session, match_id)
+    if match.locked_by_user_id == user.id:
+        return {"detail": "already owner"}
+    add_request(match_id, user.id, user.username)
+    notify_join(match_id, user.username)
+    return {"detail": "requested"}
+
+
+@router.post("/{match_id}/join_decision")
+async def decide_join(
+    match_id: int,
+    requester_user_id: int,
+    accept: bool,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    match = await get_match_or_404(session, match_id)
+    await ensure_lock_owner(session, match, user)
+    req = pop_request(match_id, requester_user_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if accept:
+        add_collaborator(match_id, requester_user_id)
+        notify_join_decision(
+            requester_user_id,
+            {"match_id": match_id, "approved": True, "owner_username": user.username},
+        )
+        return {"detail": "accepted"}
+    notify_join_decision(
+        requester_user_id,
+        {"match_id": match_id, "approved": False, "owner_username": user.username},
+    )
+    return {"detail": "denied"}

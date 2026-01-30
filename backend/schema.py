@@ -109,6 +109,7 @@ class Action(BaseModel):
     result: Optional[bool] = False
     user_id: Optional[int] = None
     is_opponent: bool = False
+    username: Optional[str] = None
 
 class ActionCreate(Action):
     pass

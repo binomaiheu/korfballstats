@@ -1,6 +1,6 @@
 from nicegui import app, ui
 
-from frontend.api import api_login
+from frontend.api import api_login, api_me
 
 
 @ui.page("/login")
@@ -18,6 +18,11 @@ def login_page():
 
         app.storage.user["token"] = data.get("access_token")
         app.storage.user["username"] = data.get("username")
+        try:
+            me = await api_me()
+            app.storage.user["user_id"] = me.get("id")
+        except Exception:
+            app.storage.user.pop("user_id", None)
         ui.notify("Logged in", type="positive")
         ui.navigate.to("/home")
 

@@ -22,6 +22,7 @@ class LiveState:
         self.selected_match_data: Optional[Dict] = None  # Full match data including is_finalized
         self.selected_player_id: Optional[int] = None
         self.locked_match_id: Optional[int] = None
+        self.is_collaborator: bool = False
 
         # Game Data
         self.actions: List = []
@@ -42,6 +43,9 @@ class LiveState:
         self.current_action = None
         self.x: float = None
         self.y: float = None
+        self.api_token: Optional[str] = None
+        self.owner_username: Optional[str] = None
+        self.collaborator_usernames: List[str] = []
 
         # Auto-save timer
         self.playtime_save_timer = None
@@ -150,7 +154,11 @@ class LiveController:
 
     async def lock_match(self, match_id: int):
         try:
-            await api_post(f"/matches/{match_id}/lock", {})
+            response = await api_post(f"/matches/{match_id}/lock", {})
+            if response.get("detail") == "locked":
+                return False, "locked"
+            if response.get("detail") == "collaborator":
+                return True, "collaborator"
             self.state.locked_match_id = match_id
             app.storage.user["locked_match_id"] = match_id
             return True, None
@@ -179,14 +187,29 @@ class LiveController:
             logger.error(f"Failed to finalize match: {e}")
             raise
 
-    async def load_match_actions(self, match_id: int):
-        return await api_get(f"/matches/{match_id}/actions")
+    async def load_match_actions(self, match_id: int, token: Optional[str] = None):
+        return await api_get(f"/matches/{match_id}/actions", token=token)
 
     async def update_action(self, action_id: int, payload: dict):
         return await api_put(f"/actions/{action_id}", payload)
 
     async def delete_action(self, action_id: int):
         await api_delete(f"/actions/{action_id}")
+
+    async def request_join(self, match_id: int, token: Optional[str] = None):
+        return await api_post(f"/matches/{match_id}/join_request", {}, token=token)
+
+    async def load_join_requests(self, match_id: int, token: Optional[str] = None):
+        return await api_get(f"/matches/{match_id}/join_requests", token=token)
+
+    async def decide_join(self, match_id: int, requester_user_id: int, accept: bool):
+        return await api_post(
+            f"/matches/{match_id}/join_decision?requester_user_id={requester_user_id}&accept={'true' if accept else 'false'}",
+            {},
+        )
+
+    async def load_collaborators(self, match_id: int, token: Optional[str] = None):
+        return await api_get(f"/matches/{match_id}/collaborators", token=token)
 
     def apply_match_settings(self, minutes: int, halves: int):
         self.state.period_minutes = minutes
