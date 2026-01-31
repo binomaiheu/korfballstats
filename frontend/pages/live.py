@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import events
 import difflib
 import logging
@@ -58,7 +59,7 @@ class PlayerButton(ui.button):
 ACTION_LABELS = {
     ActionType.SHOT: "Schot",
     ActionType.KORTE_KANS: "Korte kans",
-    ActionType.VRIJWORP: "Vrije worp",
+    ActionType.VRIJWORP: "Vrijworp",
     ActionType.STRAFWORP: "Strafworp",
     ActionType.INLOPER: "Inloper",
     ActionType.REBOUND: "Rebound",
@@ -162,50 +163,99 @@ def live_page():
             if not text:
                 return
 
-            # Submit result
-            if any(word in text for word in ["ok", "oke", "score", "raak"]):
-                await submit(True)
+            def normalize(text_value: str) -> str:
+                cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text_value.lower())
+                return " ".join(cleaned.split())
+
+            text = normalize(text)
+
+            async def confirm_voice_choice(message: str) -> bool:
+                done = asyncio.Event()
+                result = {"value": False}
+                with ui.dialog() as dialog, ui.card():
+                    ui.label(message).classes("text-sm")
+                    with ui.row().classes("gap-2 mt-2"):
+                        ui.button("OK", on_click=lambda: (result.update(value=True), dialog.close(), done.set()))
+                        ui.button("Cancel", on_click=lambda: (dialog.close(), done.set()))
+                dialog.open()
+                await done.wait()
+                return result["value"]
+
+            # Strict order: action -> player -> result
+            tokens = text.split()
+            if len(tokens) < 2:
+                ui.notify("Voice format: actie speler resultaat", type="warning")
                 return
-            if any(word in text for word in ["gemist", "mis", "naast"]):
-                await submit(False)
-                return
+            result_words = {"ok", "oke", "score", "raak", "doelpunt", "goal", "gemist", "mis", "naast"}
+            result_index = None
+            for idx, token in enumerate(tokens):
+                if token in result_words:
+                    result_index = idx
+                    break
+            special_no_result = {ActionType.REBOUND, ActionType.ASSIST, ActionType.STEAL}
+            if result_index is None:
+                action_words = tokens[0]
+                player_words = " ".join(tokens[1:]).strip()
+                result_word = None
+            else:
+                if result_index == 0:
+                    ui.notify("Say result last: ok/score or gemist/mis", type="warning")
+                    return
+                action_words = " ".join(tokens[:max(1, result_index - 1)]).strip()
+                player_words = " ".join(tokens[max(1, result_index - 1):result_index]).strip()
+                result_word = tokens[result_index]
 
             # Select action
             action_phrases = {
                 "schot": ActionType.SHOT,
-                "shot": ActionType.SHOT,
                 "korte kans": ActionType.KORTE_KANS,
                 "kortekans": ActionType.KORTE_KANS,
-                "kk": ActionType.KORTE_KANS,
                 "vrijworp": ActionType.VRIJWORP,
-                "vrije worp": ActionType.VRIJWORP,
-                "vw": ActionType.VRIJWORP,
                 "strafworp": ActionType.STRAFWORP,
                 "penalty": ActionType.STRAFWORP,
-                "sw": ActionType.STRAFWORP,
                 "inloper": ActionType.INLOPER,
-                "inl": ActionType.INLOPER,
                 "rebound": ActionType.REBOUND,
                 "assist": ActionType.ASSIST,
+                "steun": ActionType.ASSIST,
                 "steal": ActionType.STEAL,
+                "stelen": ActionType.STEAL,
             }
-            for phrase, action_type in action_phrases.items():
-                if phrase in text:
-                    on_action_button_click(action_type)
+            def best_match(value: str, candidates: list[str]) -> tuple[str | None, float]:
+                best_score = 0.0
+                best_value = None
+                for candidate in candidates:
+                    score = difflib.SequenceMatcher(None, value, candidate).ratio()
+                    if score > best_score:
+                        best_score = score
+                        best_value = candidate
+                return best_value, best_score
+
+            action_value, action_score = best_match(action_words, list(action_phrases.keys()))
+            if not action_value or action_score < 0.65:
+                ui.notify("Action not recognized", type="warning")
+                return
+            if action_score < 0.8:
+                if not await confirm_voice_choice(f'Action "{action_value}"?'):
                     return
-            action_match = difflib.get_close_matches(text, list(action_phrases.keys()), n=1, cutoff=0.6)
-            if action_match:
-                on_action_button_click(action_phrases[action_match[0]])
+            on_action_button_click(action_phrases[action_value])
+            action_type = action_phrases[action_value]
+            if result_word is None and action_type not in special_no_result:
+                ui.notify("Say result last: ok/score or gemist/mis", type="warning")
                 return
 
+            matched_player_label = None
+
             # Select player by number
-            for token in text.split():
+            player_tokens = [t for t in player_words.split() if t not in {"speler", "nummer"}]
+            for token in player_tokens:
                 if token.isdigit():
                     number = int(token)
                     for player in state.players:
                         if player.get("number") == number:
                             on_player_button_click(player["id"])
-                            return
+                            player_words = ""
+                            matched_player_label = f"#{number}"
+                            break
 
             # Select player by fuzzy name match
             candidates = []
@@ -220,10 +270,29 @@ def live_page():
                     candidates.append(name)
                     candidate_map[name] = player["id"]
 
-            best = difflib.get_close_matches(text, candidates, n=1, cutoff=0.7)
-            if best:
-                on_player_button_click(candidate_map[best[0]])
-                return
+            if player_words:
+                best_player, player_score = best_match(player_words, candidates)
+                if not best_player or player_score < 0.65:
+                    ui.notify("Player not recognized", type="warning")
+                    return
+                if player_score < 0.85:
+                    if not await confirm_voice_choice(f'Player "{best_player}"?'):
+                        return
+                on_player_button_click(candidate_map[best_player])
+                matched_player_label = best_player
+
+            # Submit result
+            player_label = matched_player_label or player_words or "speler"
+            action_label = format_action_label(action_type)
+            if action_type in special_no_result:
+                await submit(True)
+                ui.notify(f"Voice: {action_label} → {player_label}", type="positive")
+            elif result_word in {"ok", "oke", "score", "raak", "doelpunt", "goal"}:
+                await submit(True)
+                ui.notify(f"Voice: {action_label} → {player_label} (score)", type="positive")
+            elif result_word in {"gemist", "mis", "naast"}:
+                await submit(False)
+                ui.notify(f"Voice: {action_label} → {player_label} (miss)", type="warning")
 
         async def poll_voice_queue():
             if not getattr(state, "voice_enabled", False):
@@ -1261,7 +1330,11 @@ def live_page():
                 with ui.row().classes("items-center gap-3"):
                     ui.switch("Voice input", on_change=on_voice_toggle)
                     voice_status = ui.label("Voice: Off").classes("text-xs text-grey-6")
-                    ui.label("Commands: speler/nummer 7, schot/korte kans/vrijworp/strafworp/inloper, ok/score, gemist/mis").classes("text-xs text-grey-6")
+                    ui.label(
+                        "Zeg: actie speler resultaat (bv. 'schot jan ok'). "
+                        "Acties: schot, korte kans, vrije worp, strafworp, inloper, rebound, assist/steun, steal. "
+                        "Resultaat: ok/score of gemist/mis."
+                    ).classes("text-xs text-grey-6")
                 voice_timer = ui.timer(0.5, poll_voice_queue, active=False)
 
                 with ui.row().classes("items-start gap-4"):
