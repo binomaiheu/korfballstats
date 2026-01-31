@@ -44,13 +44,17 @@ python scripts/create_user.py <username>
 
 You will be prompted for a password. After that, login at `http://localhost:8855/login`.
 
-### Environment variables
+## Environment variables
 
-The following environment variables are used for authentication and storage:
+All environment variables used by this app:
 
 - `KORFBALL_SECRET_KEY`: JWT signing key (required for production)
 - `KORFBALL_TOKEN_HOURS`: access token lifetime in hours (default: 12)
 - `KORFBALL_STORAGE_SECRET`: NiceGUI storage secret (required for `app.storage.user`)
+- `KORFBALL_LOCK_TIMEOUT_MINUTES`: stale lock timeout in minutes (default: 10)
+- `KORFBALL_API_URL`: API base URL for the bootstrap script (default: `http://localhost:8855/api/v1`)
+- `KORFBALL_API_USER`: API username for the bootstrap script
+- `KORFBALL_API_PASSWORD`: API password for the bootstrap script
 
 ### Match editing locks
 
@@ -78,11 +82,7 @@ If authentication is enabled, provide credentials via:
 KORFBALL_API_USER=your_user KORFBALL_API_PASSWORD=your_password python scripts/bootstrap_db.py
 ```
 
-The bootstrap script can also use:
-
-- `KORFBALL_API_URL`: API base URL (default: `http://localhost:8855/api/v1`)
-- `KORFBALL_API_USER`: API username
-- `KORFBALL_API_PASSWORD`: API password
+The bootstrap script reads its API configuration from the environment variables above.
 
 
 ## API

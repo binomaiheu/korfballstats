@@ -90,6 +90,7 @@ def live_page():
         # ---------------------------------------------------------------
         # HELPERS
         # ---------------------------------------------------------------
+        LIVE_STATE_KEY = "live_state"
 
         async def load_teams():
             teams = await controller.load_teams()
@@ -127,6 +128,47 @@ def live_page():
         async def save_playtime_data():
             """Save current playtime data to database"""
             await controller.save_playtime_data()
+
+        def persist_live_state() -> None:
+            action_value = None
+            if state.current_action is not None:
+                action_value = state.current_action.value if hasattr(state.current_action, "value") else state.current_action
+            app.storage.user[LIVE_STATE_KEY] = {
+                "selected_team_id": state.selected_team_id,
+                "selected_match_id": state.selected_match_id,
+                "active_player_ids": sorted(state.active_player_ids),
+                "current_action": action_value,
+                "period": state.period,
+                "period_minutes": state.period_minutes,
+                "total_periods": state.total_periods,
+            }
+
+        async def restore_live_state() -> None:
+            data = app.storage.user.get(LIVE_STATE_KEY) or {}
+            team_id = data.get("selected_team_id")
+            match_id = data.get("selected_match_id")
+            action_value = data.get("current_action")
+            active_ids = set(data.get("active_player_ids") or [])
+
+            if team_id:
+                state.selected_team_id = team_id
+                team_select.value = team_id
+                await load_matches(team_id)
+
+            if match_id:
+                match_select.value = match_id
+                await on_match_change(match_id)
+
+                if active_ids:
+                    state.active_player_ids = active_ids
+                    render_players(state.players)
+
+                if action_value:
+                    try:
+                        state.current_action = ActionType(action_value)
+                    except Exception:
+                        state.current_action = None
+                    render_actions()
 
         async def lock_match(match_id: int) -> bool:
             success, detail = await controller.lock_match(match_id)
@@ -175,6 +217,11 @@ def live_page():
                 return False
             return state.selected_match_data.get("locked_by_user_id") == state.user_id
 
+        def can_edit_match() -> bool:
+            if state.is_match_finalized:
+                return False
+            return is_owner() or state.is_collaborator
+
         async def on_action_event():
             await refresh_actions_table()
 
@@ -194,10 +241,14 @@ def live_page():
                 ui.notify(f"Join approved by {owner}", type="positive")
                 collaboration_controls.refresh()
                 collaboration_status.refresh()
+                render_actions()
+                render_players(state.players)
+                result_buttons.refresh()
             else:
                 ui.notify(f"Join denied by {owner}", type="warning")
                 collaboration_controls.refresh()
                 collaboration_status.refresh()
+                result_buttons.refresh()
             ui.timer(0, refresh_collaboration_state, once=True)
 
         def on_clock_event(payload: dict):
@@ -218,6 +269,8 @@ def live_page():
                 state.selected_match_data["is_finalized"] = bool(payload.get("is_finalized"))
                 if state.selected_match_data["is_finalized"]:
                     state.clock_running = False
+                    state.current_action = None
+                    state.selected_player_id = None
             if payload.get("locked_by_user_id") is not None:
                 if state.selected_match_data is None:
                     state.selected_match_data = {}
@@ -225,9 +278,15 @@ def live_page():
                 collaboration_controls.refresh()
                 collaboration_status.refresh()
                 ui.timer(0, refresh_collaboration_state, once=True)
+                render_actions()
+                render_players(state.players)
+                result_buttons.refresh()
             if state.clock_display:
                 state.clock_display.text = state.formatted_remaining_time
             clock_area.refresh()
+            if payload.get("is_finalized") is not None:
+                render_actions()
+                render_players(state.players)
 
         def on_active_players_event(payload: dict):
             player_ids = payload.get("player_ids") or []
@@ -413,6 +472,7 @@ def live_page():
             render_players(state.players)
             ii.content = ""  # Clear the playfield indicator
             await refresh_actions_table()
+            persist_live_state()
 
 
         async def on_team_change(team_id):
@@ -442,6 +502,7 @@ def live_page():
             clock_area.refresh()
             collaboration_controls.refresh()
             collaboration_status.refresh()
+            persist_live_state()
 
 
         async def on_match_change(match_id):
@@ -481,6 +542,7 @@ def live_page():
                 await refresh_actions_table()
                 collaboration_controls.refresh()
                 collaboration_status.refresh()
+                persist_live_state()
                 return
             
             # Load match data (including finalized status)
@@ -513,6 +575,8 @@ def live_page():
             clock_area.refresh()
             await refresh_actions_table()
             await refresh_collaboration_state()
+            result_buttons.refresh()
+            persist_live_state()
 
             subscribe_actions(state.selected_match_id, ui.context.client, on_action_event)
             subscribe_clock(state.selected_match_id, ui.context.client, on_clock_event)
@@ -564,6 +628,8 @@ def live_page():
 
         # simple handler for clicking a player button (when enabled)
         def on_player_button_click(player_id):
+            if not can_edit_match():
+                return
             # If inactive → ignore click
             if player_id not in state.active_player_ids:
                 return
@@ -580,10 +646,15 @@ def live_page():
 
             # Re-render buttons (lightweight refresh)
             render_players(state.players)
+            persist_live_state()
 
 
         # Switch handler
         async def on_switch_handler(e, pid, button):
+            if not can_edit_match():
+                ui.notify("Match is locked by another user", type="warning")
+                e.value = not e.value
+                return
             if state.is_match_finalized:
                 ui.notify("Cannot modify active players for a finalized match", type="warning")
                 # Reset switch to previous state
@@ -601,6 +672,7 @@ def live_page():
             button.update()
             render_players(state.players)
             broadcast_active_players()
+            persist_live_state()
 
 
         def render_actions():
@@ -615,7 +687,7 @@ def live_page():
                         action_type == state.current_action,
                         on_click=on_action_button_click
                     )
-                    if state.is_match_finalized:
+                    if state.is_match_finalized or not can_edit_match():
                         act_btn.disable()
 
 
@@ -650,8 +722,9 @@ def live_page():
                                 value=is_active,
                                 on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button),
                             )
-                            if state.is_match_finalized:
+                            if state.is_match_finalized or not can_edit_match():
                                 player_switch.disable()
+                                btn.disable()
 
                             time_label = ui.label(state.formatted_player_time(player_id)).classes("text-xs text-grey-6")
                             state.player_time_labels[player_id] = time_label
@@ -875,7 +948,7 @@ def live_page():
                     ui.separator().props("vertical").classes("mx-4")
                     ui.label(score_text).classes("text-4xl font-bold")
                     opp_button = ui.button("Opp Goal", on_click=register_opponent_goal, color="orange").classes("ml-2")
-                    if state.is_match_finalized:
+                    if state.is_match_finalized or not can_edit_match():
                         opp_button.disable()
                     settings_btn = ui.button(icon="settings", color="grey").props("flat round")
                     with settings_btn:
@@ -971,6 +1044,9 @@ def live_page():
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
             ).classes("w-48")  # Make the select wider
+            with ui.tabs().props("dense") as tabs:
+                ui.tab("Live")
+                ui.tab("Events")
             with ui.row().classes("items-center gap-3"):
                 collaboration_controls()
                 collaboration_status()
@@ -1016,10 +1092,6 @@ def live_page():
                 requests_table.on("deny", lambda e: deny_request(e.args))
                 ui.button("Close", on_click=join_requests_dialog.close)
 
-        with ui.tabs().classes("w-full mt-2").props("dense") as tabs:
-            ui.tab("Live")
-            ui.tab("Events")
-
         with ui.tab_panels(tabs, value="Live").classes("w-full"):
             with ui.tab_panel("Live"):
 
@@ -1029,21 +1101,23 @@ def live_page():
                         action_column = ui.row().classes("items-center gap-2 flex-wrap")
                     with ui.card():
                         ui.label("Result").classes("text-xs font-bold text-grey-6")
-                        with ui.row().classes("items-center gap-2"):
-                            ok_button = ui.button(
-                                "Ok / Score",
-                                on_click=lambda x: submit(True),
-                                icon="thumb_up"
-                            )
-                            if state.is_match_finalized:
-                                ok_button.disable()
-                            miss_button = ui.button(
-                                "Gemist",
-                                on_click=lambda x: submit(False),
-                                icon="thumb_down"
-                            )
-                            if state.is_match_finalized:
-                                miss_button.disable()
+                        @ui.refreshable
+                        def result_buttons():
+                            with ui.row().classes("items-center gap-2"):
+                                ok_button = ui.button(
+                                    "Ok / Score",
+                                    on_click=lambda x: submit(True),
+                                    icon="thumb_up"
+                                )
+                                miss_button = ui.button(
+                                    "Gemist",
+                                    on_click=lambda x: submit(False),
+                                    icon="thumb_down"
+                                )
+                                if state.is_match_finalized or not can_edit_match():
+                                    ok_button.disable()
+                                    miss_button.disable()
+                        result_buttons()
 
                 with ui.row().classes("items-start gap-4"):
                     src = 'korfball_field.svg'
@@ -1104,6 +1178,7 @@ def live_page():
         # ---------------------------------------------------------------
         async def refresh_all():
             await load_teams()
+            await restore_live_state()
 
         ui.timer(0, refresh_all, once=True)
 

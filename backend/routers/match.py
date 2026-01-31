@@ -20,6 +20,7 @@ from backend.services.match_service import (
     get_match_or_404,
     unlock_all_for_user,
     transfer_lock_on_owner_exit,
+    clear_stale_lock,
 )
 from backend.services.collaboration import add_collaborator, add_request, get_requests, pop_request, is_collaborator, list_collaborators
 from backend.services.join_events import notify as notify_join
@@ -230,6 +231,8 @@ async def lock_match(
     match = await get_match_or_404(session, match_id)
 
     ensure_not_finalized(match, "Cannot lock a finalized match")
+
+    await clear_stale_lock(session, match)
 
     if match.locked_by_user_id and match.locked_by_user_id != user.id:
         if is_collaborator(match_id, user.id):
