@@ -12,6 +12,7 @@ from backend.db import get_session
 from backend.schema import ActionRead, ActionCreate
 from backend.models import Action, Match, User
 from backend.services.match_service import ensure_lock_owner, ensure_not_finalized
+from backend.services.action_events import notify
 
 
 router = APIRouter(prefix="/actions", tags=["Actions"], dependencies=[Depends(get_current_user)])
@@ -31,7 +32,7 @@ async def add_action(
     ensure_not_finalized(match, "Cannot add actions to a finalized match")
     await ensure_lock_owner(session, match, user)
 
-    action_payload = action.model_dump()
+    action_payload = action.model_dump(exclude={"username"})
     if action_payload.get("is_opponent"):
         action_payload["player_id"] = None
     action_payload["user_id"] = user.id
@@ -51,6 +52,7 @@ async def add_action(
             detail="Error creating new action in database"
         )
     
+    notify(action.match_id)
     return action
 
 
@@ -100,6 +102,7 @@ async def edit_action(
             detail="Error updating action"
         )
 
+    notify(action.match_id)
     return action
 
 
@@ -123,6 +126,7 @@ async def remove_action(
         await session.delete(action)
         await session.commit()
 
+        notify(action.match_id)
     except IntegrityError:
         await session.rollback()
 

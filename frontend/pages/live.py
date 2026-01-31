@@ -1,12 +1,17 @@
 from asyncio import events
 import logging
 
-from nicegui import ui, events
+from nicegui import app, ui, events
 
 from backend.schema import ActionType
 from frontend.api import api_post
 from frontend.layout import apply_layout
 from frontend.pages.live_controller import get_live_controller
+from backend.services.action_events import subscribe as subscribe_actions, unsubscribe as unsubscribe_actions
+from backend.services.join_events import subscribe as subscribe_joins, unsubscribe as unsubscribe_joins
+from backend.services.join_decision_events import subscribe as subscribe_join_decisions, unsubscribe as unsubscribe_join_decisions
+from backend.services.clock_events import subscribe as subscribe_clock, unsubscribe as unsubscribe_clock, notify as notify_clock
+from backend.services.active_players_events import subscribe as subscribe_active_players, unsubscribe as unsubscribe_active_players, notify as notify_active_players
 
 from typing import List
 
@@ -78,10 +83,14 @@ def live_page():
     def content():
         controller = get_live_controller()
         state = controller.state
+        state.api_token = app.storage.user.get("token")
+        state.user_id = app.storage.user.get("user_id")
+        state.username = app.storage.user.get("username")
 
         # ---------------------------------------------------------------
         # HELPERS
         # ---------------------------------------------------------------
+        LIVE_STATE_KEY = "live_state"
 
         async def load_teams():
             teams = await controller.load_teams()
@@ -120,11 +129,197 @@ def live_page():
             """Save current playtime data to database"""
             await controller.save_playtime_data()
 
+        def persist_live_state() -> None:
+            action_value = None
+            if state.current_action is not None:
+                action_value = state.current_action.value if hasattr(state.current_action, "value") else state.current_action
+            app.storage.user[LIVE_STATE_KEY] = {
+                "selected_team_id": state.selected_team_id,
+                "selected_match_id": state.selected_match_id,
+                "active_player_ids": sorted(state.active_player_ids),
+                "current_action": action_value,
+                "period": state.period,
+                "period_minutes": state.period_minutes,
+                "total_periods": state.total_periods,
+            }
+
+        async def restore_live_state() -> None:
+            data = app.storage.user.get(LIVE_STATE_KEY) or {}
+            team_id = data.get("selected_team_id")
+            match_id = data.get("selected_match_id")
+            action_value = data.get("current_action")
+            active_ids = set(data.get("active_player_ids") or [])
+
+            if team_id:
+                state.selected_team_id = team_id
+                team_select.value = team_id
+                await load_matches(team_id)
+
+            if match_id:
+                match_select.value = match_id
+                await on_match_change(match_id)
+
+                if active_ids:
+                    state.active_player_ids = active_ids
+                    render_players(state.players)
+
+                if action_value:
+                    try:
+                        state.current_action = ActionType(action_value)
+                    except Exception:
+                        state.current_action = None
+                    render_actions()
+
         async def lock_match(match_id: int) -> bool:
             success, detail = await controller.lock_match(match_id)
-            if not success:
+            if not success and detail != "locked":
                 ui.notify(f"Match is locked: {detail}", type="warning")
+            state.is_collaborator = detail == "collaborator"
+            if success and state.selected_match_data:
+                state.selected_match_data["locked_by_user_id"] = state.user_id
             return success
+
+        def build_clock_payload() -> dict:
+            return {
+                "clock_running": state.clock_running,
+                "clock_seconds": state.clock_seconds,
+                "remaining_seconds": state.remaining_seconds,
+                "period": state.period,
+                "period_minutes": state.period_minutes,
+                "total_periods": state.total_periods,
+                "is_finalized": state.is_match_finalized,
+                "locked_by_user_id": state.selected_match_data.get("locked_by_user_id") if state.selected_match_data else None,
+            }
+
+        def broadcast_clock_state() -> None:
+            if not state.selected_match_id:
+                return
+            if not state.selected_match_data:
+                return
+            if state.selected_match_data.get("locked_by_user_id") != state.user_id:
+                return
+            notify_clock(state.selected_match_id, build_clock_payload())
+
+        def build_active_players_payload() -> dict:
+            return {"player_ids": sorted(state.active_player_ids)}
+
+        def broadcast_active_players() -> None:
+            if not state.selected_match_id:
+                return
+            if not state.selected_match_data:
+                return
+            if not (state.is_collaborator or state.selected_match_data.get("locked_by_user_id") == state.user_id):
+                return
+            notify_active_players(state.selected_match_id, build_active_players_payload())
+
+        def is_owner() -> bool:
+            if not state.selected_match_data:
+                return False
+            return state.selected_match_data.get("locked_by_user_id") == state.user_id
+
+        def can_edit_match() -> bool:
+            if state.is_match_finalized:
+                return False
+            return is_owner() or state.is_collaborator
+
+        async def on_action_event():
+            await refresh_actions_table()
+
+        def on_join_request(requester_username: str):
+            ui.notify(f"{requester_username} wants to join this match", type="warning")
+            ui.timer(0, lambda: load_join_requests(requests_table), once=True)
+            collaboration_controls.refresh()
+            collaboration_status.refresh()
+
+        def on_join_decision(payload: dict):
+            if payload.get("match_id") != state.selected_match_id:
+                return
+            approved = payload.get("approved")
+            owner = payload.get("owner_username")
+            if approved:
+                state.is_collaborator = True
+                ui.notify(f"Join approved by {owner}", type="positive")
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
+                render_actions()
+                render_players(state.players)
+                result_buttons.refresh()
+            else:
+                ui.notify(f"Join denied by {owner}", type="warning")
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
+                result_buttons.refresh()
+            ui.timer(0, refresh_collaboration_state, once=True)
+
+        def on_clock_event(payload: dict):
+            if payload.get("period_minutes"):
+                state.period_minutes = payload.get("period_minutes")
+            if payload.get("total_periods"):
+                state.total_periods = payload.get("total_periods")
+            state.clock_running = bool(payload.get("clock_running"))
+            if payload.get("clock_seconds") is not None:
+                state.clock_seconds = int(payload.get("clock_seconds"))
+            if payload.get("remaining_seconds") is not None:
+                state.remaining_seconds = int(payload.get("remaining_seconds"))
+            if payload.get("period") is not None:
+                state.period = int(payload.get("period"))
+            if payload.get("is_finalized") is not None:
+                if state.selected_match_data is None:
+                    state.selected_match_data = {}
+                state.selected_match_data["is_finalized"] = bool(payload.get("is_finalized"))
+                if state.selected_match_data["is_finalized"]:
+                    state.clock_running = False
+                    state.current_action = None
+                    state.selected_player_id = None
+            if payload.get("locked_by_user_id") is not None:
+                if state.selected_match_data is None:
+                    state.selected_match_data = {}
+                state.selected_match_data["locked_by_user_id"] = payload.get("locked_by_user_id")
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
+                ui.timer(0, refresh_collaboration_state, once=True)
+                render_actions()
+                render_players(state.players)
+                result_buttons.refresh()
+            if state.clock_display:
+                state.clock_display.text = state.formatted_remaining_time
+            clock_area.refresh()
+            if payload.get("is_finalized") is not None:
+                render_actions()
+                render_players(state.players)
+
+        def on_active_players_event(payload: dict):
+            player_ids = payload.get("player_ids") or []
+            state.active_player_ids = set(player_ids)
+            render_players(state.players)
+
+        async def request_join_match():
+            if not state.selected_match_id:
+                return
+            try:
+                await controller.request_join(state.selected_match_id, token=state.api_token)
+                ui.notify("Join request sent", type="positive")
+                collaboration_controls.refresh()
+            except Exception as exc:
+                ui.notify(f"Failed to request join: {exc}", type="negative")
+
+        async def refresh_collaboration_state():
+            if not state.selected_match_id:
+                state.owner_username = None
+                state.collaborator_usernames = []
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
+                return
+            data = await controller.load_collaborators(state.selected_match_id, token=state.api_token)
+            owner = data.get("owner") or {}
+            state.owner_username = owner.get("username")
+            state.collaborator_usernames = [
+                c.get("username")
+                for c in data.get("collaborators", [])
+                if c.get("username")
+            ]
+            collaboration_controls.refresh()
+            collaboration_status.refresh()
 
         async def unlock_match(match_id: int) -> None:
             await controller.unlock_match(match_id)
@@ -132,6 +327,9 @@ def live_page():
         async def finalize_match():
             """Finalize the current match"""
             if not state.selected_match_id:
+                return
+            if not is_owner():
+                ui.notify("Only the match owner can finalize", type="warning")
                 return
             if state.clock_running:
                 ui.notify("Pause the clock before finalizing the match", type="warning")
@@ -141,6 +339,7 @@ def live_page():
                 match_data = await controller.finalize_match()
                 if not match_data:
                     return
+                state.selected_match_data = match_data
                 state.clock_running = False
                 logger.info(f"Match {state.selected_match_id} finalized")
                 if state.locked_match_id:
@@ -151,6 +350,7 @@ def live_page():
                 clock_area.refresh()
                 render_actions()
                 render_players(state.players)
+                broadcast_clock_state()
                 
                 ui.notify("Match finalized successfully", type="positive")
             except Exception as e:
@@ -180,6 +380,7 @@ def live_page():
                     )
                     clock_area.refresh()
                     set_time_dialog.close()
+                    broadcast_clock_state()
 
                 ui.button("Save", on_click=save)
 
@@ -187,10 +388,14 @@ def live_page():
             if state.is_match_finalized:
                 ui.notify("Cannot modify clock for a finalized match", type="warning")
                 return
+            if not is_owner():
+                ui.notify("Only the match owner can control the clock", type="warning")
+                return
             if not controller.toggle_clock():
                 ui.notify("Reset the clock before starting", type="warning")
                 return
             clock_area.refresh()
+            broadcast_clock_state()
 
         def tick():
             controller.tick(
@@ -198,18 +403,27 @@ def live_page():
                 lambda message: ui.notify(message, type="warning"),
                 clock_area.refresh,
             )
+            if state.clock_running:
+                broadcast_clock_state()
 
 
         def reset_clock():
             if state.is_match_finalized:
                 ui.notify("Cannot reset clock for a finalized match", type="warning")
                 return
+            if not is_owner():
+                ui.notify("Only the match owner can reset the clock", type="warning")
+                return
             controller.reset_clock()
             clock_area.refresh()
+            broadcast_clock_state()
 
         def set_clock_dialog():
             if state.is_match_finalized:
                 ui.notify("Cannot set time for a finalized match", type="warning")
+                return
+            if not is_owner():
+                ui.notify("Only the match owner can change settings", type="warning")
                 return
             set_time_dialog.open()
         
@@ -258,6 +472,7 @@ def live_page():
             render_players(state.players)
             ii.content = ""  # Clear the playfield indicator
             await refresh_actions_table()
+            persist_live_state()
 
 
         async def on_team_change(team_id):
@@ -276,18 +491,30 @@ def live_page():
             state.clock_seconds = 0
             state.period = 1
             state.remaining_seconds = state.period_minutes * 60
+            state.is_collaborator = False
+            state.owner_username = None
+            state.collaborator_usernames = []
 
             players_column.clear()
             if state.locked_match_id:
                 await unlock_match(state.locked_match_id)
                 state.locked_match_id = None
             clock_area.refresh()
+            collaboration_controls.refresh()
+            collaboration_status.refresh()
+            persist_live_state()
 
 
         async def on_match_change(match_id):
             # Save playtime for previous match if exists
             if state.selected_match_id and not state.is_match_finalized:
                 await save_playtime_data()
+
+            if state.selected_match_id:
+                unsubscribe_actions(state.selected_match_id, ui.context.client)
+                unsubscribe_joins(state.selected_match_id, ui.context.client)
+                unsubscribe_clock(state.selected_match_id, ui.context.client)
+                unsubscribe_active_players(state.selected_match_id, ui.context.client)
 
             if state.locked_match_id:
                 await unlock_match(state.locked_match_id)
@@ -296,6 +523,7 @@ def live_page():
             state.selected_match_id = match_id
             state.selected_match_data = None
             players_column.clear()
+            state.is_collaborator = False
 
             logger.info(f"Switching match to {match_id}")
             if match_id is None:
@@ -307,8 +535,14 @@ def live_page():
                 state.remaining_seconds = state.period_minutes * 60
                 state.team_score = 0
                 state.opponent_score = 0
+                state.is_collaborator = False
+                state.owner_username = None
+                state.collaborator_usernames = []
                 clock_area.refresh()
                 await refresh_actions_table()
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
+                persist_live_state()
                 return
             
             # Load match data (including finalized status)
@@ -321,10 +555,9 @@ def live_page():
                     await unlock_match(state.locked_match_id)
                     state.locked_match_id = None
             else:
-                if not await lock_match(match_id):
-                    match_select.value = None
-                    state.selected_match_id = None
-                    return
+                await lock_match(match_id)
+                collaboration_controls.refresh()
+                collaboration_status.refresh()
             
             # Load playtime data
             await load_playtime_data(match_id)
@@ -341,6 +574,15 @@ def live_page():
             render_players(state.players)
             clock_area.refresh()
             await refresh_actions_table()
+            await refresh_collaboration_state()
+            result_buttons.refresh()
+            persist_live_state()
+
+            subscribe_actions(state.selected_match_id, ui.context.client, on_action_event)
+            subscribe_clock(state.selected_match_id, ui.context.client, on_clock_event)
+            subscribe_active_players(state.selected_match_id, ui.context.client, on_active_players_event)
+            if state.selected_match_data and state.selected_match_data.get("locked_by_user_id") == state.user_id:
+                subscribe_joins(state.selected_match_id, ui.context.client, on_join_request)
             
             # Start auto-save timer (save every 30 seconds)
             if state.playtime_save_timer:
@@ -352,6 +594,14 @@ def live_page():
             if state.locked_match_id:
                 await unlock_match(state.locked_match_id)
                 state.locked_match_id = None
+            if state.selected_match_id:
+                unsubscribe_actions(state.selected_match_id, ui.context.client)
+                unsubscribe_joins(state.selected_match_id, ui.context.client)
+                unsubscribe_clock(state.selected_match_id, ui.context.client)
+                unsubscribe_active_players(state.selected_match_id, ui.context.client)
+            user_id = state.user_id
+            if user_id:
+                unsubscribe_join_decisions(user_id, ui.context.client)
 
 
         def on_action_button_click(action_type):
@@ -378,6 +628,8 @@ def live_page():
 
         # simple handler for clicking a player button (when enabled)
         def on_player_button_click(player_id):
+            if not can_edit_match():
+                return
             # If inactive → ignore click
             if player_id not in state.active_player_ids:
                 return
@@ -394,10 +646,15 @@ def live_page():
 
             # Re-render buttons (lightweight refresh)
             render_players(state.players)
+            persist_live_state()
 
 
         # Switch handler
         async def on_switch_handler(e, pid, button):
+            if not can_edit_match():
+                ui.notify("Match is locked by another user", type="warning")
+                e.value = not e.value
+                return
             if state.is_match_finalized:
                 ui.notify("Cannot modify active players for a finalized match", type="warning")
                 # Reset switch to previous state
@@ -414,6 +671,8 @@ def live_page():
             
             button.update()
             render_players(state.players)
+            broadcast_active_players()
+            persist_live_state()
 
 
         def render_actions():
@@ -428,7 +687,7 @@ def live_page():
                         action_type == state.current_action,
                         on_click=on_action_button_click
                     )
-                    if state.is_match_finalized:
+                    if state.is_match_finalized or not can_edit_match():
                         act_btn.disable()
 
 
@@ -463,8 +722,9 @@ def live_page():
                                 value=is_active,
                                 on_change=lambda e, pid=player_id, button=btn: on_switch_handler(e, pid, button),
                             )
-                            if state.is_match_finalized:
+                            if state.is_match_finalized or not can_edit_match():
                                 player_switch.disable()
+                                btn.disable()
 
                             time_label = ui.label(state.formatted_player_time(player_id)).classes("text-xs text-grey-6")
                             state.player_time_labels[player_id] = time_label
@@ -504,7 +764,7 @@ def live_page():
                 actions_table.rows = []
                 actions_table.update()
                 return
-            actions = await controller.load_match_actions(state.selected_match_id)
+            actions = await controller.load_match_actions(state.selected_match_id, token=state.api_token)
             players_by_id = {p["id"]: p for p in state.players}
 
             def format_time(seconds: int) -> str:
@@ -527,6 +787,7 @@ def live_page():
                     "id": action.get("id"),
                     "action": action_label,
                     "player_name": player_name,
+                    "username": action.get("username"),
                     "timestamp": format_time(action.get("timestamp", 0)),
                     "period": action.get("period"),
                     "x": x_fmt,
@@ -641,9 +902,23 @@ def live_page():
                 
                 with ui.row().classes("items-center"):
                     # Period Controls
-                    period_minus = ui.button("-", on_click=lambda: setattr(state, 'period', max(1, state.period - 1)) or clock_area.refresh()).props("round sm")
+                    def decrement_period():
+                        if not is_owner():
+                            ui.notify("Only the match owner can change the half", type="warning")
+                            return
+                        state.period = max(1, state.period - 1)
+                        clock_area.refresh()
+
+                    def increment_period():
+                        if not is_owner():
+                            ui.notify("Only the match owner can change the half", type="warning")
+                            return
+                        state.period += 1
+                        clock_area.refresh()
+
+                    period_minus = ui.button("-", on_click=decrement_period).props("round sm")
                     ui.label(f"P{state.period}").classes("text-xl font-bold mx-2")
-                    period_plus = ui.button("+", on_click=lambda: setattr(state, 'period', state.period + 1) or clock_area.refresh()).props("round sm")
+                    period_plus = ui.button("+", on_click=increment_period).props("round sm")
                     
                     if state.is_match_finalized:
                         period_minus.disable()
@@ -673,7 +948,7 @@ def live_page():
                     ui.separator().props("vertical").classes("mx-4")
                     ui.label(score_text).classes("text-4xl font-bold")
                     opp_button = ui.button("Opp Goal", on_click=register_opponent_goal, color="orange").classes("ml-2")
-                    if state.is_match_finalized:
+                    if state.is_match_finalized or not can_edit_match():
                         opp_button.disable()
                     settings_btn = ui.button(icon="settings", color="grey").props("flat round")
                     with settings_btn:
@@ -696,6 +971,44 @@ def live_page():
                             icon="lock",
                         ).classes("ml-2")
 
+        @ui.refreshable
+        def collaboration_controls():
+            if not state.selected_match_id or state.is_match_finalized:
+                return
+            if state.selected_match_data and state.selected_match_data.get("locked_by_user_id") == state.user_id:
+                ui.button("Join Requests", on_click=open_join_requests).props("flat")
+                return
+            if state.locked_match_id:
+                return
+            if getattr(state, "is_collaborator", False):
+                return
+            if state.selected_match_data and state.selected_match_data.get("locked_by_user_id"):
+                ui.button("Request to join", on_click=request_join_match).props("flat")
+
+        @ui.refreshable
+        def collaboration_status():
+            if not state.selected_match_id:
+                return
+            if is_owner():
+                ui.label("Owner: You").classes("text-xs text-grey-7")
+                if state.collaborator_usernames:
+                    ui.label(f"Connected: {', '.join(state.collaborator_usernames)}").classes("text-xs text-grey-7")
+                return
+            if state.owner_username:
+                ui.label(f"Owner: {state.owner_username}").classes("text-xs text-grey-7")
+
+        async def load_join_requests(table):
+            data = await controller.load_join_requests(state.selected_match_id, token=state.api_token)
+            table.rows = [
+                {"id": item["requester"]["id"], "username": item["requester"]["username"]}
+                for item in data
+            ]
+            table.update()
+
+        def open_join_requests():
+            ui.timer(0, lambda: load_join_requests(requests_table), once=True)
+            join_requests_dialog.open()
+
                     
 
         def mouse_handler(e: events.MouseEventArguments):
@@ -714,6 +1027,9 @@ def live_page():
         # UI LAYOUT
         # ---------------------------------------------------------------
         ui.context.client.on_disconnect(handle_disconnect)
+        user_id = state.user_id
+        if user_id:
+            subscribe_join_decisions(user_id, ui.context.client, on_join_decision)
         with ui.row().classes("items-center gap-4"):
             team_select = ui.select(
                 {},
@@ -728,27 +1044,53 @@ def live_page():
                 with_input=False,
                 on_change=lambda e: on_match_change(e.value),
             ).classes("w-48")  # Make the select wider
-
-            with ui.button(icon="settings", color="grey").props("flat round") as settings_btn:
-                with ui.menu():
-                    ui.menu_item("Set Time", on_click=set_clock_dialog)
-                    ui.menu_item("Reset", on_click=reset_clock)
-                    ui.separator()
-                    ui.menu_item("Save Playtime", on_click=lambda: save_playtime_data())
-                    finalize_item = ui.menu_item(
-                        "Finalize Match" if not state.is_match_finalized else "Match Finalized",
-                        on_click=lambda: finalize_match() if (state.selected_match_id and not state.is_match_finalized) else None,
-                    )
-                    if not state.selected_match_id or state.is_match_finalized:
-                        finalize_item.disable()
+            with ui.tabs().props("dense") as tabs:
+                ui.tab("Live")
+                ui.tab("Events")
+            with ui.row().classes("items-center gap-3"):
+                collaboration_controls()
+                collaboration_status()
 
 
         with ui.row():
             clock_area()
+        with ui.dialog() as join_requests_dialog:
+            with ui.card():
+                ui.label("Join requests").classes("text-lg font-bold")
+                requests_table = ui.table(
+                    columns=[
+                        {"name": "username", "label": "User", "field": "username", "align": "left"},
+                        {"name": "actions", "label": "Actions", "field": "id", "classes": "auto-width"},
+                    ],
+                    rows=[],
+                    row_key="id",
+                ).classes("w-full mt-2 q-table--dense")
 
-        with ui.tabs().classes("w-full mt-2").props("dense") as tabs:
-            ui.tab("Live")
-            ui.tab("Events")
+                async def accept_request(row_id):
+                    await controller.decide_join(state.selected_match_id, row_id, True)
+                    await load_join_requests(requests_table)
+                    broadcast_clock_state()
+                    broadcast_active_players()
+                    await refresh_collaboration_state()
+
+                async def deny_request(row_id):
+                    await controller.decide_join(state.selected_match_id, row_id, False)
+                    await load_join_requests(requests_table)
+                    await refresh_collaboration_state()
+
+                requests_table.add_slot('body-cell', '''
+                <q-td :props="props">
+                    <template v-if="props.col.name === 'actions'">
+                        <q-btn flat dense round icon="check" color="green" @click="() => $parent.$emit('accept', props.row.id)" />
+                        <q-btn flat dense round icon="close" color="red" @click="() => $parent.$emit('deny', props.row.id)" />
+                    </template>
+                    <template v-else>
+                        {{ props.value }}
+                    </template>
+                </q-td>''')
+                requests_table.on("accept", lambda e: accept_request(e.args))
+                requests_table.on("deny", lambda e: deny_request(e.args))
+                ui.button("Close", on_click=join_requests_dialog.close)
 
         with ui.tab_panels(tabs, value="Live").classes("w-full"):
             with ui.tab_panel("Live"):
@@ -759,21 +1101,23 @@ def live_page():
                         action_column = ui.row().classes("items-center gap-2 flex-wrap")
                     with ui.card():
                         ui.label("Result").classes("text-xs font-bold text-grey-6")
-                        with ui.row().classes("items-center gap-2"):
-                            ok_button = ui.button(
-                                "Ok / Score",
-                                on_click=lambda x: submit(True),
-                                icon="thumb_up"
-                            )
-                            if state.is_match_finalized:
-                                ok_button.disable()
-                            miss_button = ui.button(
-                                "Gemist",
-                                on_click=lambda x: submit(False),
-                                icon="thumb_down"
-                            )
-                            if state.is_match_finalized:
-                                miss_button.disable()
+                        @ui.refreshable
+                        def result_buttons():
+                            with ui.row().classes("items-center gap-2"):
+                                ok_button = ui.button(
+                                    "Ok / Score",
+                                    on_click=lambda x: submit(True),
+                                    icon="thumb_up"
+                                )
+                                miss_button = ui.button(
+                                    "Gemist",
+                                    on_click=lambda x: submit(False),
+                                    icon="thumb_down"
+                                )
+                                if state.is_match_finalized or not can_edit_match():
+                                    ok_button.disable()
+                                    miss_button.disable()
+                        result_buttons()
 
                 with ui.row().classes("items-start gap-4"):
                     src = 'korfball_field.svg'
@@ -781,7 +1125,12 @@ def live_page():
                     #ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown', 'mouseup'], cross=True)
                     with ui.card():
                         ui.label("Playfield").classes("text-xs font-bold text-grey-6")
-                        ii = ui.interactive_image(src, on_mouse=mouse_handler, events=['mousedown']).style('width: 600px; height: auto')
+                        ii = ui.interactive_image(
+                            src,
+                            on_mouse=mouse_handler,
+                            events=['mousedown'],
+                            sanitize=False,
+                        ).style('width: 600px; height: auto')
                     with ui.card():
                         ui.label("Players").classes("text-xs font-bold text-grey-6")
                         players_column = ui.column()
@@ -796,6 +1145,7 @@ def live_page():
                             {'name': 'actions', 'label': 'Actions', 'field': 'id', 'classes': 'auto-width no-wrap'},
                             {"name": "action", "label": "Action", "field": "action", "align": 'left'},
                             {"name": "player_name", "label": "Player", "field": "player_name", "align": 'left'},
+                            {"name": "username", "label": "User", "field": "username", "align": 'left'},
                             {"name": "timestamp", "label": "Time", "field": "timestamp", "align": 'right'},
                             {"name": "period", "label": "Half", "field": "period", "align": 'right'},
                             {"name": "x", "label": "X", "field": "x", "align": 'right'},
@@ -828,6 +1178,7 @@ def live_page():
         # ---------------------------------------------------------------
         async def refresh_all():
             await load_teams()
+            await restore_live_state()
 
         ui.timer(0, refresh_all, once=True)
 

@@ -68,12 +68,15 @@ def matches_page():
 
             team_label = team_select.options.get(team_select.value, "Unknown")
             
-            with ui.dialog().classes('w-2/3') as dialog, ui.card().classes('w-full'):
+            with ui.dialog().classes('w-1/2') as dialog, ui.card().classes('w-full'):
                 ui.label(f'Add new {team_label} match').classes('text-xl mb-2')
-                with ui.row().classes('w-full'):
-                    match_date_diag = ui.date_input('Match Date').classes('w-70')
-                    opponent_input_diag = ui.input('Opponent Name').classes('w-70')
-                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-70')
+                with ui.column().classes('w-full gap-4'):
+                    match_date_diag = ui.date_input(
+                        'Match Date',
+                        on_change=lambda e: match_date_diag.menu.close(),
+                    ).classes('w-full')
+                    opponent_input_diag = ui.input('Opponent Name').classes('w-full')
+                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-full')
                 with ui.row():
                     ui.button('Save', on_click=lambda: create_new_match(team_select.value, match_date_diag.value, opponent_input_diag.value, location_input_diag.value, dialog))
                     ui.button('Cancel', on_click=dialog.close)
@@ -86,17 +89,20 @@ def matches_page():
                 return
 
             match = p.args
-            with ui.dialog().classes('w-2/3') as dialog, ui.card().classes('w-full'):
+            with ui.dialog().classes('w-1/2') as dialog, ui.card().classes('w-full'):
                 ui.label('Edit match').classes('text-xl mb-2')
-                with ui.row().classes('w-full'):
+                with ui.column().classes('w-full gap-4'):
                     team_options = {team['id']: team['name'] for team in await api_get("/teams")}
-                    team_select_diag = ui.select(team_options, label="Team", with_input=False).classes("w-32")
+                    team_select_diag = ui.select(team_options, label="Team", with_input=False).classes("w-full")
                     team_select_diag.set_value(match['team']['id'] if match.get('team') else None)
-                    match_date_diag = ui.date_input('Match Date').classes('w-70')
+                    match_date_diag = ui.date_input(
+                        'Match Date',
+                        on_change=lambda e: match_date_diag.menu.close(),
+                    ).classes('w-full')
                     match_date_diag.set_value(match['date'])
-                    opponent_input_diag = ui.input('Opponent Name').classes('w-70')
+                    opponent_input_diag = ui.input('Opponent Name').classes('w-full')
                     opponent_input_diag.set_value(match['opponent_name'])
-                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-70')
+                    location_input_diag = ui.select(options=['Thuis', 'Uit'], label='Location').classes('w-full')
                     location_input_diag.set_value(match['location'])
                 with ui.row():
                     ui.button('Save', on_click=lambda: save_edited_match(match['id'], team_select_diag.value, match_date_diag.value, opponent_input_diag.value, location_input_diag.value, dialog))
