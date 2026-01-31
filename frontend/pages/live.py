@@ -1,4 +1,5 @@
 from asyncio import events
+import difflib
 import logging
 
 from nicegui import app, ui, events
@@ -54,12 +55,33 @@ class PlayerButton(ui.button):
 
 
 
+ACTION_LABELS = {
+    ActionType.SHOT: "Schot",
+    ActionType.KORTE_KANS: "Korte kans",
+    ActionType.VRIJWORP: "Vrije worp",
+    ActionType.STRAFWORP: "Strafworp",
+    ActionType.INLOPER: "Inloper",
+    ActionType.REBOUND: "Rebound",
+    ActionType.ASSIST: "Assist",
+    ActionType.STEAL: "Steal",
+}
+
+
+def format_action_label(action_value: str | ActionType) -> str:
+    if isinstance(action_value, ActionType):
+        return ACTION_LABELS.get(action_value, action_value.name.replace("_", " ").title())
+    for action_type in ActionType:
+        if action_type.value == action_value or action_type.name == action_value:
+            return ACTION_LABELS.get(action_type, action_type.name.replace("_", " ").title())
+    return str(action_value or "").replace("_", " ").title()
+
+
 class ActionButton(ui.button):
     def __init__(self, action: ActionType, selected: bool, on_click, *args, **kwargs):
         self._action = action
         self._selected = selected
         self._on_click = on_click
-        super().__init__(action.name.replace("_", " ").title())
+        super().__init__(format_action_label(action))
         self.on('click', self.toggle)
 
         self.update()
@@ -93,7 +115,7 @@ def live_page():
         LIVE_STATE_KEY = "live_state"
 
         async def load_teams():
-            teams = await controller.load_teams()
+            teams = await controller.load_teams(token=state.api_token)
             team_select.set_options({t["id"]: t["name"] for t in teams})
 
             # keep selected team if possible
@@ -104,7 +126,7 @@ def live_page():
             """
             Load matches. If team_id is given: filter only that team's matches.
             """
-            matches = await controller.load_matches(team_id)
+            matches = await controller.load_matches(team_id, token=state.api_token)
 
             match_select.set_options({
                 m["id"]: f'{m.get("date", "")[:10]} — {m.get("opponent_name", "")} ({m["team"]["name"]})'
@@ -115,19 +137,102 @@ def live_page():
             match_select.value = None
 
         async def load_team_players(team_id: int):
-            return await controller.load_team_players(team_id)
+            return await controller.load_team_players(team_id, token=state.api_token)
         
         async def load_match_data(match_id: int):
             """Load full match data including finalized status"""
-            return await controller.load_match_data(match_id)
+            return await controller.load_match_data(match_id, token=state.api_token)
         
         async def load_playtime_data(match_id: int):
             """Load saved playtime data from database"""
-            return await controller.load_playtime_data(match_id)
+            return await controller.load_playtime_data(match_id, token=state.api_token)
         
         async def save_playtime_data():
             """Save current playtime data to database"""
-            await controller.save_playtime_data()
+            await controller.save_playtime_data(token=state.api_token)
+
+        async def handle_voice_command(command: str) -> None:
+            if not state.selected_match_id:
+                return
+            if not can_edit_match():
+                ui.notify("Match is locked by another user", type="warning")
+                return
+
+            text = command.strip().lower()
+            if not text:
+                return
+
+            # Submit result
+            if any(word in text for word in ["ok", "oke", "score", "raak"]):
+                await submit(True)
+                return
+            if any(word in text for word in ["gemist", "mis", "naast"]):
+                await submit(False)
+                return
+
+            # Select action
+            action_phrases = {
+                "schot": ActionType.SHOT,
+                "shot": ActionType.SHOT,
+                "korte kans": ActionType.KORTE_KANS,
+                "kortekans": ActionType.KORTE_KANS,
+                "kk": ActionType.KORTE_KANS,
+                "vrijworp": ActionType.VRIJWORP,
+                "vrije worp": ActionType.VRIJWORP,
+                "vw": ActionType.VRIJWORP,
+                "strafworp": ActionType.STRAFWORP,
+                "penalty": ActionType.STRAFWORP,
+                "sw": ActionType.STRAFWORP,
+                "inloper": ActionType.INLOPER,
+                "inl": ActionType.INLOPER,
+                "rebound": ActionType.REBOUND,
+                "assist": ActionType.ASSIST,
+                "steal": ActionType.STEAL,
+            }
+            for phrase, action_type in action_phrases.items():
+                if phrase in text:
+                    on_action_button_click(action_type)
+                    return
+            action_match = difflib.get_close_matches(text, list(action_phrases.keys()), n=1, cutoff=0.6)
+            if action_match:
+                on_action_button_click(action_phrases[action_match[0]])
+                return
+
+            # Select player by number
+            for token in text.split():
+                if token.isdigit():
+                    number = int(token)
+                    for player in state.players:
+                        if player.get("number") == number:
+                            on_player_button_click(player["id"])
+                            return
+
+            # Select player by fuzzy name match
+            candidates = []
+            candidate_map = {}
+            for player in state.players:
+                first = (player.get("first_name") or "").lower().strip()
+                last = (player.get("last_name") or "").lower().strip()
+                full = f"{first} {last}".strip()
+                for name in [first, last, full]:
+                    if not name:
+                        continue
+                    candidates.append(name)
+                    candidate_map[name] = player["id"]
+
+            best = difflib.get_close_matches(text, candidates, n=1, cutoff=0.7)
+            if best:
+                on_player_button_click(candidate_map[best[0]])
+                return
+
+        async def poll_voice_queue():
+            if not getattr(state, "voice_enabled", False):
+                return
+            text = await ui.run_javascript(
+                "return (window.__voice_queue && window.__voice_queue.shift()) || null"
+            )
+            if text:
+                await handle_voice_command(str(text))
 
         def persist_live_state() -> None:
             action_value = None
@@ -171,7 +276,7 @@ def live_page():
                     render_actions()
 
         async def lock_match(match_id: int) -> bool:
-            success, detail = await controller.lock_match(match_id)
+            success, detail = await controller.lock_match(match_id, token=state.api_token)
             if not success and detail != "locked":
                 ui.notify(f"Match is locked: {detail}", type="warning")
             state.is_collaborator = detail == "collaborator"
@@ -322,7 +427,7 @@ def live_page():
             collaboration_status.refresh()
 
         async def unlock_match(match_id: int) -> None:
-            await controller.unlock_match(match_id)
+            await controller.unlock_match(match_id, token=state.api_token)
         
         async def finalize_match():
             """Finalize the current match"""
@@ -336,7 +441,7 @@ def live_page():
                 return
             
             try:
-                match_data = await controller.finalize_match()
+                match_data = await controller.finalize_match(token=state.api_token)
                 if not match_data:
                     return
                 state.selected_match_data = match_data
@@ -455,7 +560,7 @@ def live_page():
             }
 
             try:
-                await api_post("/actions", action_data)
+                await api_post("/actions", action_data, token=state.api_token)
                 logger.info(f"Submitted action: {action_data}")
             except Exception as e:
                 logger.error(f"Failed to submit action: {e}")
@@ -777,7 +882,7 @@ def live_page():
                 player_name = "Opponent" if action.get("is_opponent") else (
                     f'{player.get("first_name", "")} {player.get("last_name", "")}'.strip() if player else str(action.get("player_id"))
                 )
-                action_label = (action.get("action") or "").replace("_", " ").title()
+                action_label = format_action_label(action.get("action") or "")
                 result_label = "Score" if action.get("result") else "Miss"
                 x_val = action.get("x")
                 y_val = action.get("y")
@@ -841,7 +946,7 @@ def live_page():
                             "is_opponent": is_opponent,
                         }
                         try:
-                            await controller.update_action(raw.get("id"), payload)
+                            await controller.update_action(raw.get("id"), payload, token=state.api_token)
                             dialog.close()
                             await refresh_actions_table()
                         except Exception as exc:
@@ -856,7 +961,7 @@ def live_page():
             row = e.args
             raw = row.get("_raw", {})
             try:
-                await controller.delete_action(raw.get("id"))
+                await controller.delete_action(raw.get("id"), token=state.api_token)
                 await refresh_actions_table()
             except Exception as exc:
                 ui.notify(f"Failed to delete action: {exc}", type="negative")
@@ -879,7 +984,7 @@ def live_page():
                 "is_opponent": True,
             }
             try:
-                await api_post("/actions", action_data)
+                await api_post("/actions", action_data, token=state.api_token)
             except Exception as exc:
                 ui.notify(f"Failed to add opponent goal: {exc}", type="negative")
                 return
@@ -1094,6 +1199,70 @@ def live_page():
 
         with ui.tab_panels(tabs, value="Live").classes("w-full"):
             with ui.tab_panel("Live"):
+                state.voice_enabled = False
+
+                async def on_voice_toggle(e):
+                    enabled = bool(e.value)
+                    state.voice_enabled = enabled
+                    if not enabled:
+                        voice_status.text = "Voice: Off"
+                        voice_timer.active = False
+                        await ui.run_javascript("""
+                            window.__voice_enabled = false;
+                            if (window.__voice_recognition) {
+                                try { window.__voice_recognition.stop(); } catch (e) {}
+                            }
+                        """)
+                        return
+
+                    supported = await ui.run_javascript(
+                        "return !!(window.SpeechRecognition || window.webkitSpeechRecognition)"
+                    )
+                    if not supported:
+                        ui.notify("Voice input is not supported in this browser", type="warning")
+                        state.voice_enabled = False
+                        voice_status.text = "Voice: Off"
+                        e.value = False
+                        return
+
+                    voice_status.text = "Voice: On"
+                    voice_timer.active = True
+                    await ui.run_javascript("""
+                        window.__voice_queue = window.__voice_queue || [];
+                        window.__voice_enabled = true;
+                        if (!window.__voice_recognition) {
+                            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                            const rec = new SpeechRecognition();
+                            rec.lang = 'nl-NL';
+                            rec.continuous = true;
+                            rec.interimResults = false;
+                            rec.onresult = (event) => {
+                                for (let i = event.resultIndex; i < event.results.length; i++) {
+                                    if (event.results[i].isFinal) {
+                                        window.__voice_queue.push(event.results[i][0].transcript);
+                                    }
+                                }
+                            };
+                            rec.onend = () => {
+                                if (window.__voice_enabled) {
+                                    try { rec.start(); } catch (e) {}
+                                }
+                            };
+                            rec.onerror = () => {
+                                if (window.__voice_enabled) {
+                                    try { rec.stop(); } catch (e) {}
+                                }
+                            };
+                            window.__voice_recognition = rec;
+                        }
+                        try { window.__voice_recognition.start(); } catch (e) {}
+                    """)
+
+                with ui.row().classes("items-center gap-3"):
+                    ui.switch("Voice input", on_change=on_voice_toggle)
+                    voice_status = ui.label("Voice: Off").classes("text-xs text-grey-6")
+                    ui.label("Commands: speler/nummer 7, schot/korte kans/vrijworp/strafworp/inloper, ok/score, gemist/mis").classes("text-xs text-grey-6")
+                voice_timer = ui.timer(0.5, poll_voice_queue, active=False)
 
                 with ui.row().classes("items-start gap-4"):
                     with ui.card():

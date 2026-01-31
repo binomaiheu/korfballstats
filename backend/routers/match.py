@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy import select, insert
 from sqlalchemy.orm import selectinload
 
@@ -29,6 +29,7 @@ from backend.services.clock_events import notify as notify_clock
 from backend.schema import UserRead
 
 from logging import getLogger
+import asyncio
 
 
 logger = getLogger('uvicorn.error')
@@ -245,10 +246,20 @@ async def lock_match(
 
     try:
         session.add(match)
-        await session.commit()
+        for attempt in range(3):
+            try:
+                await session.commit()
+                break
+            except OperationalError:
+                await session.rollback()
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.2 * (attempt + 1))
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status_code=400, detail="Error locking match")
+    except OperationalError:
+        raise HTTPException(status_code=503, detail="Database is busy, please retry")
 
     return {"detail": "ok"}
 
