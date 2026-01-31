@@ -3,6 +3,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from typing import Optional, List
 from datetime import datetime, timezone
+import sqlite3
 
 
 from .schema import ActionType, MatchType, SexType
@@ -127,6 +128,12 @@ class Playtime(Base):
 
 
 async def init_db():
+    try:
+        with sqlite3.connect("korfball.db") as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+    except sqlite3.Error:
+        pass
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_action_coordinates_nullable(conn)

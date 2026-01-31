@@ -82,23 +82,23 @@ class LiveController:
         if self.state.timer is None:
             self.state.timer = ui.timer(1.0, tick_cb)
 
-    async def load_teams(self):
-        return await api_get("/teams")
+    async def load_teams(self, token: Optional[str] = None):
+        return await api_get("/teams", token=token)
 
-    async def load_matches(self, team_id: Optional[int] = None):
+    async def load_matches(self, team_id: Optional[int] = None, token: Optional[str] = None):
         if team_id:
-            return await api_get(f"/teams/{team_id}/matches")
-        return await api_get("/matches")
+            return await api_get(f"/teams/{team_id}/matches", token=token)
+        return await api_get("/matches", token=token)
 
-    async def load_team_players(self, team_id: int):
+    async def load_team_players(self, team_id: int, token: Optional[str] = None):
         try:
-            return await api_get(f"/teams/{team_id}/players")
+            return await api_get(f"/teams/{team_id}/players", token=token)
         except Exception:
             return []
 
-    async def load_match_data(self, match_id: int):
+    async def load_match_data(self, match_id: int, token: Optional[str] = None):
         try:
-            match_data = await api_get(f"/matches/{match_id}")
+            match_data = await api_get(f"/matches/{match_id}", token=token)
             self.state.selected_match_data = match_data
             self.state.period = match_data.get("current_period", self.state.period)
             self.state.period_minutes = match_data.get("period_minutes", self.state.period_minutes)
@@ -108,9 +108,9 @@ class LiveController:
             logger.error(f"Failed to load match data: {e}")
             return None
 
-    async def load_playtime_data(self, match_id: int):
+    async def load_playtime_data(self, match_id: int, token: Optional[str] = None):
         try:
-            playtime_data = await api_get(f"/playtime/{match_id}")
+            playtime_data = await api_get(f"/playtime/{match_id}", token=token)
             self.state.saved_player_seconds = {
                 pp["player_id"]: pp["time_played"]
                 for pp in playtime_data.get("player_playtimes", [])
@@ -125,7 +125,7 @@ class LiveController:
             self.state.saved_player_seconds = {}
             return None
 
-    async def save_playtime_data(self):
+    async def save_playtime_data(self, token: Optional[str] = None):
         if not self.state.selected_match_id or self.state.is_match_finalized:
             return
 
@@ -144,7 +144,7 @@ class LiveController:
                 "total_periods": self.state.total_periods,
             }
 
-            await api_put(f"/playtime/{self.state.selected_match_id}", time_update)
+            await api_put(f"/playtime/{self.state.selected_match_id}", time_update, token=token)
             logger.info(f"Saved playtime data: {time_update}")
 
             self.state.saved_player_seconds = total_player_times
@@ -152,9 +152,9 @@ class LiveController:
         except Exception as e:
             logger.error(f"Failed to save playtime data: {e}")
 
-    async def lock_match(self, match_id: int):
+    async def lock_match(self, match_id: int, token: Optional[str] = None):
         try:
-            response = await api_post(f"/matches/{match_id}/lock", {})
+            response = await api_post(f"/matches/{match_id}/lock", {}, token=token)
             if response.get("detail") == "locked":
                 return False, "locked"
             if response.get("detail") == "collaborator":
@@ -168,19 +168,18 @@ class LiveController:
                 detail = e.args[0].get("detail", detail)
             return False, detail
 
-    async def unlock_match(self, match_id: int):
+    async def unlock_match(self, match_id: int, token: Optional[str] = None):
         try:
-            await api_post(f"/matches/{match_id}/unlock", {})
+            await api_post(f"/matches/{match_id}/unlock", {}, token=token)
         except Exception:
             return
-        app.storage.user.pop("locked_match_id", None)
 
-    async def finalize_match(self):
+    async def finalize_match(self, token: Optional[str] = None):
         if not self.state.selected_match_id:
             return None
-        await self.save_playtime_data()
+        await self.save_playtime_data(token=token)
         try:
-            match_data = await api_post(f"/matches/{self.state.selected_match_id}/finalize", {})
+            match_data = await api_post(f"/matches/{self.state.selected_match_id}/finalize", {}, token=token)
             self.state.selected_match_data = match_data
             return match_data
         except Exception as e:
@@ -190,11 +189,11 @@ class LiveController:
     async def load_match_actions(self, match_id: int, token: Optional[str] = None):
         return await api_get(f"/matches/{match_id}/actions", token=token)
 
-    async def update_action(self, action_id: int, payload: dict):
-        return await api_put(f"/actions/{action_id}", payload)
+    async def update_action(self, action_id: int, payload: dict, token: Optional[str] = None):
+        return await api_put(f"/actions/{action_id}", payload, token=token)
 
-    async def delete_action(self, action_id: int):
-        await api_delete(f"/actions/{action_id}")
+    async def delete_action(self, action_id: int, token: Optional[str] = None):
+        await api_delete(f"/actions/{action_id}", token=token)
 
     async def request_join(self, match_id: int, token: Optional[str] = None):
         return await api_post(f"/matches/{match_id}/join_request", {}, token=token)
