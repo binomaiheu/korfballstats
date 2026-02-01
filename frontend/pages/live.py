@@ -1,4 +1,5 @@
 import asyncio
+import time
 from asyncio import events
 import difflib
 import logging
@@ -374,6 +375,53 @@ def live_page():
                 return
             notify_clock(state.selected_match_id, build_clock_payload())
 
+        def update_js_clock_state() -> None:
+            if not getattr(state, "clock_display_id", None):
+                return
+            if state.clock_running:
+                remaining = state.remaining_seconds
+                started_at = int(time.time() * 1000)
+                ui.run_javascript(
+                    f"""
+                    window.__clockState = window.__clockState || {{}};
+                    window.__clockTimers = window.__clockTimers || {{}};
+                    window.__clockState['{state.clock_display_id}'] = {{
+                        remaining: {remaining},
+                        startedAt: {started_at},
+                        running: true,
+                    }};
+                    if (!window.__clockTimers['{state.clock_display_id}']) {{
+                        window.__clockTimers['{state.clock_display_id}'] = setInterval(() => {{
+                            const state = window.__clockState['{state.clock_display_id}'];
+                            const el = document.getElementById('{state.clock_display_id}');
+                            if (!state || !el) return;
+                            if (!state.running) return;
+                            const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+                            const remaining = Math.max(0, state.remaining - elapsed);
+                            const mins = String(Math.floor(remaining / 60)).padStart(2, '0');
+                            const secs = String(remaining % 60).padStart(2, '0');
+                            el.innerText = `${{mins}}:${{secs}}`;
+                        }}, 1000);
+                    }}
+                    """
+                )
+            else:
+                remaining = state.remaining_seconds
+                ui.run_javascript(
+                    f"""
+                    window.__clockState = window.__clockState || {{}};
+                    const el = document.getElementById('{state.clock_display_id}');
+                    if (el) {{
+                        const mins = String(Math.floor({remaining} / 60)).padStart(2, '0');
+                        const secs = String({remaining} % 60).padStart(2, '0');
+                        el.innerText = `${{mins}}:${{secs}}`;
+                    }}
+                    if (window.__clockState['{state.clock_display_id}']) {{
+                        window.__clockState['{state.clock_display_id}'].running = false;
+                    }}
+                    """
+                )
+
         def build_active_players_payload() -> dict:
             return {"player_ids": sorted(state.active_player_ids)}
 
@@ -458,6 +506,7 @@ def live_page():
             if state.clock_display:
                 state.clock_display.text = state.formatted_remaining_time
             clock_area.refresh()
+            update_js_clock_state()
             if payload.get("is_finalized") is not None:
                 render_actions()
                 render_players(state.players)
@@ -525,6 +574,7 @@ def live_page():
                 render_actions()
                 render_players(state.players)
                 broadcast_clock_state()
+                update_js_clock_state()
                 
                 ui.notify("Match finalized successfully", type="positive")
             except Exception as e:
@@ -570,6 +620,7 @@ def live_page():
                 return
             clock_area.refresh()
             broadcast_clock_state()
+            update_js_clock_state()
 
         def tick():
             controller.tick(
@@ -579,6 +630,7 @@ def live_page():
             )
             if state.clock_running:
                 broadcast_clock_state()
+                update_js_clock_state()
 
 
         def reset_clock():
@@ -591,6 +643,7 @@ def live_page():
             controller.reset_clock()
             clock_area.refresh()
             broadcast_clock_state()
+            update_js_clock_state()
 
         def set_clock_dialog():
             if state.is_match_finalized:
@@ -834,6 +887,9 @@ def live_page():
                 # Reset switch to previous state
                 e.value = not e.value
                 return
+
+            if state.clock_running:
+                controller.apply_elapsed()
             
             is_active = bool(e.value)
             button._active = is_active
@@ -1101,7 +1157,8 @@ def live_page():
                     ui.separator().props("vertical").classes("mx-4")
                     
                     # Time Display
-                    state.clock_display = ui.label(state.formatted_remaining_time).classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
+                    state.clock_display_id = f"clock-display-{ui.context.client.id}"
+                    state.clock_display = ui.label(state.formatted_remaining_time).props(f"id={state.clock_display_id}").classes("text-4xl font-mono font-bold mx-4 bg-black text-red-500 px-2 rounded")
                     
                     ui.separator().props("vertical").classes("mx-4")
 

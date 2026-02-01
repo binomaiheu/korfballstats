@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Dict, List, Optional, Callable, Awaitable
 
 from nicegui import app, ui
@@ -36,6 +37,8 @@ class LiveState:
         self.total_periods: int = 2
         self.remaining_seconds: int = 25 * 60
         self.timer = None
+        self.clock_started_at: Optional[float] = None
+        self.remaining_at_start: Optional[int] = None
 
         self.player_seconds: dict[int, int] = {}  # Current session playtime
         self.saved_player_seconds: dict[int, int] = {}  # Saved playtime from database
@@ -80,7 +83,7 @@ class LiveController:
 
     def ensure_timer(self, tick_cb: Callable[[], None]) -> None:
         if self.state.timer is None:
-            self.state.timer = ui.timer(1.0, tick_cb)
+            self.state.timer = ui.timer(5.0, tick_cb)
 
     async def load_teams(self, token: Optional[str] = None):
         return await api_get("/teams", token=token)
@@ -128,6 +131,9 @@ class LiveController:
     async def save_playtime_data(self, token: Optional[str] = None):
         if not self.state.selected_match_id or self.state.is_match_finalized:
             return
+
+        if self.state.clock_running:
+            self._apply_elapsed_time()
 
         try:
             total_player_times = {}
@@ -216,6 +222,8 @@ class LiveController:
         self.state.period = 1
         self.state.clock_seconds = 0
         self.state.remaining_seconds = self.state.period_minutes * 60
+        self.state.clock_started_at = None
+        self.state.remaining_at_start = None
 
     def toggle_clock(self) -> bool:
         if self.state.is_match_finalized:
@@ -223,6 +231,11 @@ class LiveController:
         if self.state.remaining_seconds <= 0:
             return False
         self.state.clock_running = not self.state.clock_running
+        if self.state.clock_running:
+            self.state.clock_started_at = time.monotonic()
+            self.state.remaining_at_start = self.state.remaining_seconds
+        else:
+            self._apply_elapsed_time()
         return True
 
     def reset_clock(self) -> bool:
@@ -232,7 +245,25 @@ class LiveController:
         self.state.clock_seconds = 0
         self.state.period = 1
         self.state.remaining_seconds = self.state.period_minutes * 60
+        self.state.clock_started_at = None
+        self.state.remaining_at_start = None
         return True
+
+    def _apply_elapsed_time(self) -> None:
+        if not self.state.clock_running or self.state.clock_started_at is None:
+            return
+        elapsed = int(time.monotonic() - self.state.clock_started_at)
+        if elapsed <= 0:
+            return
+        self.state.clock_seconds += elapsed
+        self.state.remaining_seconds = max(0, self.state.remaining_seconds - elapsed)
+        for pid in self.state.active_player_ids:
+            self.state.player_seconds[pid] = self.state.player_seconds.get(pid, 0) + elapsed
+        self.state.clock_started_at = time.monotonic()
+        self.state.remaining_at_start = self.state.remaining_seconds
+
+    def apply_elapsed(self) -> None:
+        self._apply_elapsed_time()
 
     def tick(
         self,
@@ -241,19 +272,12 @@ class LiveController:
         refresh_clock: Callable[[], None],
     ) -> None:
         if self.state.clock_running and self.state.remaining_seconds > 0:
-            self.state.remaining_seconds -= 1
-            self.state.clock_seconds += 1
-            if self.state.clock_display:
-                self.state.clock_display.text = self.state.formatted_remaining_time
-
-            for pid in self.state.active_player_ids:
-                self.state.player_seconds[pid] = self.state.player_seconds.get(pid, 0) + 1
-
+            self._apply_elapsed_time()
             if self.state.players:
                 update_players()
-
             if self.state.remaining_seconds == 0:
                 self.state.clock_running = False
+                self.state.clock_started_at = None
                 if self.state.period < self.state.total_periods:
                     self.state.period += 1
                     self.state.remaining_seconds = self.state.period_minutes * 60
